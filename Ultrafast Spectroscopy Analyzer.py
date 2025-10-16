@@ -309,7 +309,7 @@ class FLUPSAnalyzer(QMainWindow):
 
 
         
-        # --- Ajuste de colores de los ejes principales y colorbars ---
+        # --- fit de colores de los ejes principales y colorbars ---
         # Ejes del mapa principal (fondo blanco)
         self.ax_map.tick_params(colors="black")
         self.ax_map.xaxis.label.set_color("black")
@@ -726,7 +726,7 @@ class FLUPSAnalyzer(QMainWindow):
         self.result_fit = result
         self.data_corrected = result['corrected']
 
-        # dibujar curva del Ajuste sobre mapa principal
+        # dibujar curva del fit sobre mapa principal
         if self.fit_line_artist is not None:
             try:
                 self.fit_line_artist.remove()
@@ -1119,7 +1119,7 @@ class TASAnalyzer(FLUPSAnalyzer):
         self.result_fit = result
         self.data_corrected = result['corrected']
     
-        # dibujar curva del ajuste sobre mapa
+        # dibujar curva del fit sobre mapa
         if self.fit_line_artist is not None:
             try: self.fit_line_artist.remove()
             except Exception: pass
@@ -1362,7 +1362,7 @@ class TASAnalyzer(FLUPSAnalyzer):
 GlobalFitPanel - PyQt5 dialog that reproduces the behavior of your Tk script
 Embedded colormesh (Experimental/Fit/Residual tabs) + external DAS/residuals figures.
 Author: generated for you (adapted to your project)
-Requires: Ajuste.py (with eval_global_model, convolved_exp, crop_spectrum, crop_kinetics, binning, load_npy)
+Requires: fit.py (with eval_global_model, convolved_exp, crop_spectrum, crop_kinetics, binning, load_npy)
 """
 
 
@@ -1519,9 +1519,9 @@ class GlobalFitPanel(QDialog):
 
 
     def load_data(self):
-        """Call Ajuste.load_npy to open a file dialog and load processed .npy"""
+        """Call fit.load_npy to open a file dialog and load processed .npy"""
         try:
-            data_c, TD, WL, base_dir = Ajuste.load_npy(self)
+            data_c, TD, WL, base_dir = fit.load_npy(self)
             self.data_c = data_c.copy()
             self.TD = TD
             self.WL = WL
@@ -1625,7 +1625,7 @@ class GlobalFitPanel(QDialog):
                 WLmin, ok1 = QInputDialog.getDouble(self, "Lower WL", "Enter lower wavelength:", decimals=6)
                 WLmax, ok2 = QInputDialog.getDouble(self, "Upper WL", "Enter upper wavelength:", decimals=6)
                 if ok1 and ok2:
-                    self.data_c, self.WL = Ajuste.crop_spectrum(self.data_c, self.WL, min(WLmin, WLmax), max(WLmin, WLmax))
+                    self.data_c, self.WL = fit.crop_spectrum(self.data_c, self.WL, min(WLmin, WLmax), max(WLmin, WLmax))
                     self._update_exp_canvas()
 
             # 2) Crop kinetics?
@@ -1634,7 +1634,7 @@ class GlobalFitPanel(QDialog):
                 TDmin, ok1 = QInputDialog.getDouble(self, "Lower TD", "Enter lower time:", decimals=6)
                 TDmax, ok2 = QInputDialog.getDouble(self, "Upper TD", "Enter upper time:", decimals=6)
                 if ok1 and ok2:
-                    self.data_c, self.TD = Ajuste.crop_kinetics(self.data_c, self.TD, min(TDmin, TDmax), max(TDmin, TDmax))
+                    self.data_c, self.TD = fit.crop_kinetics(self.data_c, self.TD, min(TDmin, TDmax), max(TDmin, TDmax))
                     self._update_exp_canvas()
 
             # 3) Binning?
@@ -1642,7 +1642,7 @@ class GlobalFitPanel(QDialog):
             if bin_ans == QMessageBox.Yes:
                 bin_size, ok = QInputDialog.getInt(self, "Binning", "Points to average:", 5, 1)
                 if ok and bin_size > 1:
-                    self.data_c, self.WL = Ajuste.binning(self.data_c, self.WL, bin_size)
+                    self.data_c, self.WL = fit.binning(self.data_c, self.WL, bin_size)
                     self._update_exp_canvas()
 
             # 4) Number of exponentials & t0 choice
@@ -1799,7 +1799,7 @@ class GlobalFitPanel(QDialog):
         dlg.exec_()
 
     def _run_least_squares_with_progress(self):
-        """Run least_squares directly using Ajuste.eval_global_model as model,
+        """Run least_squares directly using fit.eval_global_model as model,
         so we can pass a callback to update the progress bar."""
         # build residual function (keeps same flatten ordering as script)
         numWL = len(self.WL)
@@ -1807,7 +1807,7 @@ class GlobalFitPanel(QDialog):
         data_flat = self.data_c.T.flatten()
 
         def residuals(x):
-            F = Ajuste.eval_global_model(x, TD, self.numExp, numWL, self.t0_choice)
+            F = fit.eval_global_model(x, TD, self.numExp, numWL, self.t0_choice)
             return F.flatten() - data_flat
 
         # progress bookkeeping
@@ -1844,7 +1844,7 @@ class GlobalFitPanel(QDialog):
         TD = self.TD
     
         # compute fitted matrix and residuals
-        F_mat = Ajuste.eval_global_model(x, TD, self.numExp, numWL, self.t0_choice)
+        F_mat = fit.eval_global_model(x, TD, self.numExp, numWL, self.t0_choice)
         fitres = F_mat.T
         resid = self.data_c - fitres
     
@@ -1923,7 +1923,7 @@ class GlobalFitPanel(QDialog):
         
         print("Guardando resultados en:", base_dir)
         
-        outdir = os.path.join(base_dir, "Ajuste")
+        outdir = os.path.join(base_dir, "fit")
         os.makedirs(outdir, exist_ok=True)
     
         np.save(os.path.join(outdir, "GFitResults.npy"), {
@@ -2056,11 +2056,11 @@ class GlobalFitPanel(QDialog):
                 continue
             pos3 = int(np.argmin(np.abs(self.WL - Wlobs)))
             fig, (ax1, ax2) = plt.subplots(1,2, sharey=True, figsize=(9,4))
-            ax1.plot(self.TD, self.data_c[pos3,:], 'b', label='Data')
+            ax1.plot(self.TD, self.data_c[pos3,:], 'b.', label='Data')
             ax1.plot(self.TD, self.fit_fitres[pos3,:], 'r', label='Fit')
             ax1.legend()
             ax1.set_xlim(self.TD[0], np.percentile(self.TD, 80))
-            ax2.plot(self.TD, self.data_c[pos3,:], 'b')
+            ax2.plot(self.TD, self.data_c[pos3,:], 'b.')
             ax2.plot(self.TD, self.fit_fitres[pos3,:], 'r')
             ax2.set_xscale('log')
             ax1.set_title(f"Fit at {self.WL[pos3]:.1f} nm")
