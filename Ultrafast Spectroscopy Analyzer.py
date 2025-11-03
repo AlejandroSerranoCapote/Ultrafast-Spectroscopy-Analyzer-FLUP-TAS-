@@ -663,7 +663,7 @@ class FLUPSAnalyzer(QMainWindow):
     
         self.ax_map.set_xlabel("Wavelength (nm)")
         self.ax_map.set_ylabel("Delay (ps)")
-        self.ax_map.set_title("ΔA Map (FLUPS)")
+        self.ax_map.set_title("ΔA Map")
         self.ax_map.set_yscale("symlog")
     
         #  Colorbar
@@ -809,7 +809,7 @@ class FLUPSAnalyzer(QMainWindow):
     
         self.ax_map.set_xlabel("Wavelength (nm)")
         self.ax_map.set_ylabel("Delay (ps)")
-        self.ax_map.set_title("ΔA Map (FLUPS)")
+        self.ax_map.set_title("ΔA Map")
         self.ax_map.set_yscale("symlog")
     
         divider = make_axes_locatable(self.ax_map)
@@ -1661,7 +1661,7 @@ class TASAnalyzer(FLUPSAnalyzer):
         self.ax_map.set_xlabel("Wavelength (nm)")
         self.ax_map.set_ylabel("Delay (ps)")
         self.ax_map.set_title("ΔA Map (TAS)")
-        # self.ax_map.set_yscale("symlog")
+        self.ax_map.set_yscale("symlog")
         self.ax_map.set_ylim(-1, 10)
         # Colorbar
         divider = make_axes_locatable(self.ax_map)
