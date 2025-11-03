@@ -12,7 +12,12 @@ Además, permite realizar análisis globales ajustando los datos a un modelo mul
 \Delta A(t, \lambda) = \sum_{i=1}^{n} A_i(\lambda) e^{-t/\tau_i}
 ```
 ---
+> 🧩 **Instala las dependencias necesarias con el siguiente comando (dentro de la carpeta donde está el script):**
+> ```bash
+> pip install -r requirements.txt
+> ```
 
+---
 ## ✨ Características principales
 
 ✅ Interfaz gráfica intuitiva basada en **PyQt5**  
