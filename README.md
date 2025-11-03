@@ -16,7 +16,10 @@ Además, permite realizar análisis globales ajustando los datos a un modelo mul
 > ```bash
 > pip install -r requirements.txt
 > ```
-
+>  **Para ejecutarlo, en la consola de comandos escribimos lo siguiente (dentro de la carpeta donde está el script):**
+> ```bash
+> python "Ultrafast Spectroscopy Analyzer.py"
+> ```
 ---
 ## ✨ Características principales
 
