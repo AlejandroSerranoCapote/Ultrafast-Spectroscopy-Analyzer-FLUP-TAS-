@@ -25,7 +25,7 @@ Además, permite realizar análisis globales ajustando los datos a un modelo mul
 
 ---
 
-> 📘 Consulta también: [Formatos de datos admitidos →](Ultrafast-Spectroscopy-Analyzer-FLUP-TAS-/Data_format.md)
+> 📘 Consulta también: [Formatos de datos admitidos →](./Data_format.md)
 
 ## 🖥️ Capturas de pantalla
 
