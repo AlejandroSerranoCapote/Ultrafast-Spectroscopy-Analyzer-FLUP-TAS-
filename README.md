@@ -20,6 +20,12 @@ Además, permite realizar análisis globales ajustando los datos a un modelo mul
 > ```bash
 > python "Ultrafast Spectroscopy Analyzer.py"
 > ```
+> 
+> 🧩 **Crear un .exe del script (Ejecutar en el cmd dentro de la carpeta donde está el script)**:
+> ```bash
+> pyinstaller --onefile --noconsole --icon=icon.ico --exclude-module PyQt6 "Ultrafast Spectroscopy Analyzer.py"
+> ```
+
 ---
 ## ✨ Características principales
 
