@@ -25,6 +25,7 @@ Además, permite realizar análisis globales ajustando los datos a un modelo mul
 
 ---
 
+> 📘 Consulta también: [Formatos de datos admitidos →](./DATA_FORMAT.md)
 
 ## 🖥️ Capturas de pantalla
 
