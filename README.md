@@ -43,7 +43,8 @@ Además, permite realizar análisis globales ajustando los datos a un modelo mul
 <img width="1394" height="932" alt="Foto1" src="https://github.com/user-attachments/assets/ab6397c5-5751-4c59-858c-83ba9da74b67" />
 
 > *GUI TAS*
-<img width="1399" height="930" alt="image" src="https://github.com/user-attachments/assets/989b08e7-b13c-4fc4-bcf5-53e976dd429b" />
+<img width="1381" height="925" alt="image" src="https://github.com/user-attachments/assets/fb28d525-57a1-464f-994e-8829048f7ac9" />
+
 
 > *GUI Global Fit*
 <p align="center">
