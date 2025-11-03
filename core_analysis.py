@@ -23,8 +23,8 @@ def read_csv_file(path):
     TD = np.array(TD)
     data = df.loc[valid_rows, valid_cols].apply(pd.to_numeric, errors='coerce').fillna(0).to_numpy()
     # Restar background simple (usa primeros 20 delays o todos si menos)
-    nbac = 20 if data.shape[1] > 20 else data.shape[1]
-    data = data - np.mean(data[:, :nbac], axis=1, keepdims=True)
+    # nbac = 20 if data.shape[1] > 20 else data.shape[1]
+    # data = data - np.mean(data[:, :nbac], axis=1, keepdims=True)
     return WL, TD, data
 
 
@@ -80,8 +80,8 @@ def load_from_paths(data_path, wl_path, td_path):
             print(f"Warning: data shape {data.shape} no coincide con (n_wl, n_td); se rellenó/truncó a {(nwl, ntd)}.")
     
     # ---- Restar background simple ----
-    nbac = 20 if data_arr.shape[1] > 20 else data_arr.shape[1]
-    data_arr = data_arr - np.mean(data_arr[:, :nbac], axis=1, keepdims=True)
+    # nbac = 20 if data_arr.shape[1] > 20 else data_arr.shape[1]
+    # data_arr = data_arr - np.mean(data_arr[:, :nbac], axis=1, keepdims=True)
     
     return data_arr, wl, td
 
@@ -144,6 +144,7 @@ def apply_t0_correction_poly(popt, WL, TD, data):
         corrected[i, :] = f(TD)
     return corrected, t0_lambda
 
+
 def apply_t0_correction_nonlinear(popt, WL, TD, data):
     """Corrige datos usando los parámetros popt del modelo no lineal t0_model.
     Donde t0_model(WL) devuelve NaN, los datos se mantienen sin corregir.
@@ -160,57 +161,103 @@ def apply_t0_correction_nonlinear(popt, WL, TD, data):
             corrected[i, :] = data[i, :]
     return corrected, t0_lambda
 
-# ---------------------------------------------------------------------
-# Función de ajuste (intento non-linear, si falla -> polynomial)
-# ---------------------------------------------------------------------
-def fit_t0(w_points, t0_points, WL, TD, data, min_points_nonlinear=4):
+
+def fit_t0(w_points, t0_points, WL, TD, data, min_points_nonlinear=4, mode='auto'):
     """
     Ajusta t0 a partir de puntos (w_points,t0_points) seleccionados por el usuario.
     Intentará ajustar el modelo no lineal (t0_model) si hay suficientes puntos; si falla,
     cae a un ajuste polinómico de grado 4 (requiere >=5 puntos). 
+
     Parámetros:
       - w_points: array-like de longitudes de onda (nm) de los puntos elegidos
       - t0_points: array-like de retardos (ps) correspondientes
       - WL, TD, data: arrays tal como devuelve read_csv_file
-    Devuelve:
-      dict con claves:
-        - 'method': 'nonlinear' o 'poly4'
-        - 'popt': parámetros del ajuste
-        - 'fit_x', 'fit_y': arrays con curva a graficar (x ordenadas sobre rango de w_points)
-        - 'corrected': matriz corregida (shape igual a data)
-        - 't0_lambda': t0 por WL (1D)
+      - min_points_nonlinear: mínimo número de puntos para intentar modelo no lineal
+      - mode: 'auto' (default), 'nonlinear' (forzar modelo no lineal) o 'poly' (forzar polinómico)
     """
     w = np.asarray(w_points, dtype=float)
     t0 = np.asarray(t0_points, dtype=float)
 
     if w.size < 2:
-        raise ValueError("Se necesitan al menos 2 puntos para ajustar (mejor >=4 para modelo non-linear).")
+        raise ValueError("Se necesitan al menos 2 puntos para ajustar (mejor >=4 para modelo no lineal).")
 
     fit_x = np.linspace(np.min(w), np.max(w), 400)
-    # --- Intento 1: modelo no lineal ---
-    try_nl = (w.size >= min_points_nonlinear)
-    if try_nl:
-        fit_ok = False
+
+    # =======================================================
+    # --- Modo forzado: polinómico --------------------------
+    # =======================================================
+    if mode == 'poly':
+        if w.size < 5:
+            deg = min(4, max(1, w.size - 1))
+        else:
+            deg = 4
+        coeffs = np.polyfit(w, t0, deg)
+        if coeffs.size < 5:
+            coeffs = np.concatenate([np.zeros(5 - coeffs.size), coeffs])
+        fit_y = np.polyval(coeffs, fit_x)
+        corrected, t0_lambda = apply_t0_correction_poly(coeffs, WL, TD, data)
+        return {
+            'method': f'poly{deg}',
+            'popt': coeffs,
+            'fit_x': fit_x,
+            'fit_y': fit_y,
+            'corrected': corrected,
+            't0_lambda': t0_lambda
+        }
+
+    # =======================================================
+    # --- Modo forzado: no lineal ---------------------------
+    # =======================================================
+    if mode == 'nonlinear':
         try:
             wmin = np.min(w)
-            # estimaciones iniciales robustas
             a0 = (np.nanmax(t0) - np.nanmin(t0)) / 2.0 if np.isfinite(t0).any() else 0.0
             d0 = np.nanmedian(t0)
-            # garantizar que b,c > 1/(wmin^2) para que denominadores no sean absurdos
             min_required = 1.0 / (wmin**2) if wmin != 0 else 1e-8
             b0 = min_required * 1.1
             c0 = min_required * 1.2
             p0 = [a0, b0, c0, d0]
             bounds = ([-np.inf, min_required, min_required, -np.inf],
                       [np.inf, np.inf, np.inf, np.inf])
-
             popt, pcov = curve_fit(
                 t0_model, w, t0,
                 p0=p0, bounds=bounds,
                 maxfev=20000, method="trf"
             )
             fit_y = t0_model(fit_x, *popt)
-            # comprobar que la curva resultante es finita en el rango de interés
+            corrected, t0_lambda = apply_t0_correction_nonlinear(popt, WL, TD, data)
+            return {
+                'method': 'nonlinear',
+                'popt': popt,
+                'fit_x': fit_x,
+                'fit_y': fit_y,
+                'corrected': corrected,
+                't0_lambda': t0_lambda
+            }
+        except Exception as e:
+            raise RuntimeError(f"Ajuste no lineal falló: {e}")
+
+    # =======================================================
+    # --- Modo automático (comportamiento original) ---------
+    # =======================================================
+    try_nl = (w.size >= min_points_nonlinear)
+    if try_nl:
+        try:
+            wmin = np.min(w)
+            a0 = (np.nanmax(t0) - np.nanmin(t0)) / 2.0 if np.isfinite(t0).any() else 0.0
+            d0 = np.nanmedian(t0)
+            min_required = 1.0 / (wmin**2) if wmin != 0 else 1e-8
+            b0 = min_required * 1.1
+            c0 = min_required * 1.2
+            p0 = [a0, b0, c0, d0]
+            bounds = ([-np.inf, min_required, min_required, -np.inf],
+                      [np.inf, np.inf, np.inf, np.inf])
+            popt, pcov = curve_fit(
+                t0_model, w, t0,
+                p0=p0, bounds=bounds,
+                maxfev=20000, method="trf"
+            )
+            fit_y = t0_model(fit_x, *popt)
             if np.all(np.isfinite(fit_y)):
                 corrected, t0_lambda = apply_t0_correction_nonlinear(popt, WL, TD, data)
                 return {
@@ -221,35 +268,28 @@ def fit_t0(w_points, t0_points, WL, TD, data, min_points_nonlinear=4):
                     'corrected': corrected,
                     't0_lambda': t0_lambda
                 }
-            else:
-                # si la curva no es finita, hacemos fallback
-                pass
         except Exception:
-            # intento no lineal falló -> fallback
-            pass
+            pass  # Si falla, usa fallback polinómico
 
-    # --- Fallback: polinomio grado 4 ---
+    # --- Fallback polinómico (original) ---
     if w.size < 5:
-        # no hay suficientes puntos para polinomio de grado 4 -> intentar polinomio con grado menor
         deg = min(3, max(1, w.size - 1))
     else:
         deg = 4
 
-    try:
-        coeffs = np.polyfit(w, t0, deg)
-        # si deg<4, pad con ceros para que apply_t0_correction_poly espere 5 coef.
-        if coeffs.size < 5:
-            coeffs = np.concatenate([np.zeros(5 - coeffs.size), coeffs])
-        fit_y = np.polyval(coeffs, fit_x)
-        corrected, t0_lambda = apply_t0_correction_poly(coeffs, WL, TD, data)
-        return {
-            'method': 'poly4' if deg == 4 else f'poly{deg}',
-            'popt': coeffs,
-            'fit_x': fit_x,
-            'fit_y': fit_y,
-            'corrected': corrected,
-            't0_lambda': t0_lambda
-        }
-    except Exception as e:
-        raise RuntimeError(f"Both nonlinear and polynomial fits failed: {e}")
+    coeffs = np.polyfit(w, t0, deg)
+    if coeffs.size < 5:
+        coeffs = np.concatenate([np.zeros(5 - coeffs.size), coeffs])
+    fit_y = np.polyval(coeffs, fit_x)
+    corrected, t0_lambda = apply_t0_correction_poly(coeffs, WL, TD, data)
+    return {
+        'method': f'poly{deg}',
+        'popt': coeffs,
+        'fit_x': fit_x,
+        'fit_y': fit_y,
+        'corrected': corrected,
+        't0_lambda': t0_lambda
+    }
+
+
 

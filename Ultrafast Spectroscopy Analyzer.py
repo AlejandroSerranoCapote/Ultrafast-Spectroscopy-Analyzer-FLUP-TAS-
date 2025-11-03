@@ -13,6 +13,7 @@ import os
 import sys
 import numpy as np
 import pandas as pd
+from matplotlib import cm
 import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
@@ -24,7 +25,8 @@ from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QFileDialog, QMessageBox, QSlider, QInputDialog,
     QDialog, QTabWidget, QProgressBar, QTableWidget, QTableWidgetItem,
-    QHeaderView, QComboBox, QDoubleSpinBox, QFrame
+    QHeaderView, QComboBox, QDoubleSpinBox, QFrame,QSpinBox,QDial,QSpacerItem, QSizePolicy
+    ,QGroupBox, QHBoxLayout, QRadioButton
 )
 from PyQt5.QtGui import QFont, QPalette, QColor
 from PyQt5.QtCore import Qt, QTimer
@@ -32,7 +34,8 @@ from PyQt5.QtWidgets import QLineEdit, QLabel, QHBoxLayout
 import fit
 from core_analysis import fit_t0, load_data
 from PyQt5.QtWidgets import QLineEdit, QLabel, QHBoxLayout
-
+import time
+from matplotlib.colors import BoundaryNorm
 
 class MainApp(QMainWindow):
     '''
@@ -63,7 +66,7 @@ class MainApp(QMainWindow):
 
         # --- Botones estilizados ---
         btn_flups = QPushButton("FLUPS Analyzer")
-        btn_tas = QPushButton("TAS Analyzer  (Coming soon)")
+        btn_tas = QPushButton("TAS Analyzer")
         
         for btn in [btn_flups, btn_tas]:
             btn.setFont(QFont("Segoe UI", 12))
@@ -88,24 +91,24 @@ class MainApp(QMainWindow):
             """)
             layout.addWidget(btn)
         
-        # 🔒 Desactivar el TAS Analyzer (tachado y gris)
-        font_tas = QFont("Segoe UI", 12)
-        font_tas.setStrikeOut(True)
-        btn_tas.setFont(font_tas)
-        btn_tas.setEnabled(False)
-        btn_tas.setStyleSheet("""
-            QPushButton {
-                background-color: #3a3a3a;
-                color: gray;
-                border-radius: 10px;
-                border: 2px dashed #555;
-                padding: 8px 16px;
-            }
-        """)
+         # Desactivar el TAS/FLUPS Analyzer (tachado y gris)
+        # font_tas = QFont("Segoe UI", 12)
+        # font_tas.setStrikeOut(True)
+        # btn_flups.setFont(font_tas)
+        # btn_flups.setEnabled(False)   
+        # btn_flups.setStyleSheet("""
+        #     QPushButton {
+        #         background-color: #3a3a3a;
+        #         color: gray;
+        #         border-radius: 10px;
+        #         border: 2px dashed #555;
+        #         padding: 8px 16px;
+        #     }
+        # """)
 
         # --- Conexiones ---
         btn_flups.clicked.connect(self.launch_flups)
-        # btn_tas.clicked.connect(self.launch_tas)
+        btn_tas.clicked.connect(self.launch_tas)
 
         self.setCentralWidget(central_widget)
         # --- Descripción informativa ---
@@ -139,6 +142,7 @@ class MainApp(QMainWindow):
 
 
 class FLUPSAnalyzer(QMainWindow):
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("FLUPS Analyzer — PyQt5 Edition")
@@ -151,7 +155,8 @@ class FLUPSAnalyzer(QMainWindow):
         self.file_path = None
         self.data_corrected = None
         self.result_fit = None
-    
+        self.use_discrete_levels = True  # Cambia a False si prefieres mapa continuo
+
         # widgets
         self.btn_load = QPushButton("Load CSV")
         self.btn_load.clicked.connect(self.load_file)
@@ -162,7 +167,8 @@ class FLUPSAnalyzer(QMainWindow):
         self.btn_remove_fringe = QPushButton("Remove Pump Fringe")
         self.btn_remove_fringe.clicked.connect(self.remove_pump_fringe)
         self.btn_remove_fringe.setEnabled(True)
-
+        # self.n_levels =   #  número inicial de niveles para el mapa discreto
+        
         self.label_status = QLabel("No file loaded")
     
         self.btn_select = QPushButton("Select t₀ points")
@@ -179,13 +185,19 @@ class FLUPSAnalyzer(QMainWindow):
         self.showing_corrected = False
         self.btn_global_fit = QPushButton("Global Fit")
         self.btn_global_fit.clicked.connect(self.open_global_fit)
+        
 
-        # sliders
+        # define sliders sólo una vez (en __init__, elimina la otra ocurrencia)
         self.slider_min = QSlider(Qt.Horizontal)
         self.slider_max = QSlider(Qt.Horizontal)
+        self.slider_min.setMinimum(0)
+        self.slider_max.setMinimum(0)
         self.slider_min.valueChanged.connect(self.update_wl_range)
         self.slider_max.valueChanged.connect(self.update_wl_range)
-    
+
+        # controla el throttling del movimiento del ratón
+        self._last_move_time = 0.0
+        self._move_min_interval = 1.0 / 25.0  # como máximo ~25 FPS de actualización por movimiento
         # matplotlib canvas con gridspec (mapa arriba, cinética y espectro abajo)
         self.figure = Figure(figsize=(12, 8))
         self.gs = gridspec.GridSpec(2, 2, height_ratios=[3, 1], width_ratios=[1, 1], hspace=0.25, wspace=0.35)
@@ -219,6 +231,7 @@ class FLUPSAnalyzer(QMainWindow):
     
         # layout
         top_layout = QHBoxLayout()
+        
         top_layout.addWidget(self.btn_load)
         top_layout.addWidget(self.btn_plot)
         top_layout.addWidget(self.btn_select)
@@ -227,17 +240,13 @@ class FLUPSAnalyzer(QMainWindow):
         top_layout.addWidget(self.btn_show_corr)
         top_layout.addWidget(self.btn_global_fit)
         top_layout.addWidget(self.btn_remove_fringe)
+
         
-        slider_layout = QHBoxLayout()
-        slider_layout.addWidget(QLabel("λ min"))
-        slider_layout.addWidget(self.slider_min)
-        slider_layout.addWidget(QLabel("λ max"))
-        slider_layout.addWidget(self.slider_max)
-    
+        
         layout = QVBoxLayout()
         layout.addLayout(top_layout)
         layout.addWidget(self.canvas)
-        layout.addLayout(slider_layout)
+        # layout.addLayout(slider_layout)
     
         container = QWidget()
         container.setLayout(layout)
@@ -273,42 +282,139 @@ class FLUPSAnalyzer(QMainWindow):
         """)
 
 
-        # --- Controles para límites del eje X ---
-        range_layout = QHBoxLayout()
+        # --- Layout horizontal principal ---
+        main_layout = QHBoxLayout()
         
-        # Reducir espacio entre widgets
-        range_layout.setSpacing(5)
+        # --- Layout vertical para sliders de Delay ---
+        delay_layout = QVBoxLayout()
+        delay_layout.setSpacing(5)
         
-        # Centrar horizontalmente
-        range_layout.setAlignment(Qt.AlignCenter)
-        
-        range_layout.addWidget(QLabel("Delay min (ps):"))
-        
+        # Delay min
+        delay_layout.addWidget(QLabel("Delay min (ps):"))
         self.xmin_edit = QLineEdit("-1")
         self.xmin_edit.setFixedWidth(50)
-        range_layout.addWidget(self.xmin_edit)
+        delay_layout.addWidget(self.xmin_edit)
         
-        range_layout.addWidget(QLabel("Delay max (ps):"))
-        
+        # Delay max
+        delay_layout.addWidget(QLabel("Delay max (ps):"))
         self.xmax_edit = QLineEdit("3")
         self.xmax_edit.setFixedWidth(50)
-        range_layout.addWidget(self.xmax_edit)
+        delay_layout.addWidget(self.xmax_edit)
         
+        # Botón Apply X limits
         self.btn_apply_xlim = QPushButton("Apply X limits")
-        self.btn_apply_xlim.setFixedWidth(120)  # más compacto
-        range_layout.addWidget(self.btn_apply_xlim)
-        
+        self.btn_apply_xlim.setFixedWidth(120)
         self.btn_apply_xlim.clicked.connect(self.apply_x_limits)
+        delay_layout.addWidget(self.btn_apply_xlim)
         
-        # 🔹 Agregarlo dentro de otro layout contenedor para centrarlo mejor
+        # --- Layout vertical para sliders de λ ---
+        wl_layout = QVBoxLayout()
+        wl_layout.setSpacing(5)
+        
+        # --- λ min ---
+        wl_min_layout = QHBoxLayout()
+        wl_min_label = QLabel("λ min:")
+        self.lbl_min_value = QLabel(str(400))  # valor inicial mostrado
+        self.slider_min = QSlider(Qt.Horizontal)
+        self.slider_min.setMinimum(400)
+        self.slider_min.setMaximum(800)
+        self.slider_min.setValue(500)
+        self.slider_min.valueChanged.connect(self.update_wl_range)
+        wl_min_layout.addWidget(wl_min_label)
+        wl_min_layout.addWidget(self.slider_min)
+        wl_min_layout.addWidget(self.lbl_min_value)
+        wl_layout.addLayout(wl_min_layout)
+        
+        # --- λ max ---
+        wl_max_layout = QHBoxLayout()
+        wl_max_label = QLabel("λ max:")
+        self.lbl_max_value = QLabel(str(800))  # valor inicial mostrado
+        self.slider_max = QSlider(Qt.Horizontal)
+        self.slider_max.setMinimum(400)
+        self.slider_max.setMaximum(800)
+        self.slider_max.setValue(700)
+        self.slider_max.valueChanged.connect(self.update_wl_range)
+        wl_max_layout.addWidget(wl_max_label)
+        wl_max_layout.addWidget(self.slider_max)
+        wl_max_layout.addWidget(self.lbl_max_value)
+        wl_layout.addLayout(wl_max_layout)
+
+        
+        # --- Layout vertical para la rueda ---
+        dial_layout = QVBoxLayout()
+        self.n_levels = 5
+        self.dial_levels = QDial()
+        self.dial_levels.setRange(2, 100)
+        self.dial_levels.setValue(self.n_levels)
+        self.dial_levels.setNotchesVisible(True)
+        self.dial_levels.setWrapping(False)
+        self.dial_levels.setFixedSize(80, 80)
+        self.dial_levels.valueChanged.connect(self.update_n_levels)
+        self.lbl_dial = QLabel(f"{self.n_levels}")
+        self.lbl_dial.setAlignment(Qt.AlignCenter)
+        dial_layout.addWidget(self.dial_levels, alignment=Qt.AlignCenter)
+        dial_layout.addWidget(self.lbl_dial, alignment=Qt.AlignCenter)
+        
+        # --- Combinar en layout horizontal principal ---
+        main_layout.addLayout(delay_layout)
+        main_layout.addSpacing(10)          # un pequeño espacio (en lugar de un Spacer grande)
+        main_layout.addLayout(wl_layout)
+        main_layout.addSpacing(10)
+        main_layout.addLayout(dial_layout)
+        
+        # ajustar márgenes generales del layout principal
+        main_layout.setContentsMargins(5, 0, 5, 0)
+        main_layout.setSpacing(15)  # espacio entre columnas principales
+                
+        # Contenedor final
         range_container = QWidget()
-        range_container.setLayout(range_layout)
-        range_container.setMaximumWidth(600)  # controla el ancho total del bloque
-        
-        layout.addWidget(range_container, alignment=Qt.AlignLeft)
+        range_container.setLayout(main_layout)
+        range_container.setMaximumWidth(800)  # opcional, controla el ancho total
+        layout.addWidget(range_container)
 
-
+        fit_group = QGroupBox("Modelo de ajuste t₀")
+        fit_layout = QHBoxLayout()
         
+        self.radio_poly = QRadioButton("Polinómico")
+        self.radio_nonlinear = QRadioButton("No lineal")
+        self.radio_nonlinear.setChecked(True)  # valor por defecto
+        
+        fit_layout.addWidget(self.radio_poly)
+        fit_layout.addWidget(self.radio_nonlinear)
+        fit_group.setLayout(fit_layout)
+        
+        # Añadir este grupo al layout principal (si usas un QVBoxLayout central)
+        main_layout.addWidget(fit_group)
+                
+        # --- Botón Switch dinámico (cambia entre FLUPS y TAS) ---
+        self.btn_switch = QPushButton("Switch to TAS")
+        self.btn_switch.setFixedWidth(160)
+        self.btn_switch.setCursor(Qt.PointingHandCursor)
+        self.btn_switch.setStyleSheet("""
+            QPushButton {
+                background-color: #8E24AA;
+                color: white;
+                font-weight: bold;
+                padding: 6px;
+                border-radius: 8px;
+            }
+            QPushButton:hover {
+                background-color: #AB47BC;
+            }
+        """)
+        self.btn_switch.clicked.connect(self.switch_analyzer)
+
+        # Layout inferior alineado a la derecha (una sola vez)
+        bottom_layout = QHBoxLayout()
+        bottom_layout.addStretch()
+        bottom_layout.addWidget(self.btn_switch)
+        layout.addLayout(bottom_layout)
+ 
+        # Añadir el botón al layout inferior (alineado a la derecha)
+        bottom_layout = QHBoxLayout()
+        bottom_layout.addStretch()
+        bottom_layout.addWidget(self.btn_switch)
+        layout.addLayout(bottom_layout)
         # --- fit de colores de los ejes principales y colorbars ---
         # Ejes del mapa principal (fondo blanco)
         self.ax_map.tick_params(colors="black")
@@ -330,6 +436,27 @@ class FLUPSAnalyzer(QMainWindow):
             ax.xaxis.label.set_color("black")
             ax.yaxis.label.set_color("black")
             ax.title.set_color("black")
+    def switch_analyzer(self):
+        """Cambia entre FLUPSAnalyzer y TASAnalyzer sin cerrar la nueva ventana."""
+        try:
+            target_cls_name = "FLUPSAnalyzer" if isinstance(self, TASAnalyzer) else "TASAnalyzer"
+            
+            if target_cls_name in globals() and callable(globals()[target_cls_name]):
+                TargetCls = globals()[target_cls_name]
+            else:
+                raise NameError(f"{target_cls_name} not found")
+
+            # Guarda la referencia en self (no variable local)
+            self.new_window = TargetCls()
+            self.new_window.show()
+
+            # Cierra la ventana actual
+            self.close()
+
+        except Exception as e:
+            QMessageBox.critical(self, "Switch error", f"Cannot switch analyzer:\n{e}")
+
+
 
 
     def open_global_fit(self):
@@ -452,11 +579,11 @@ class FLUPSAnalyzer(QMainWindow):
             self.WL, self.TD, self.data = wl, td, data
             self.file_path = file_path
 
-            # 🔧 Guarda también la ruta y el directorio base del CSV
+            #  Guarda también la ruta y el directorio base del CSV
             self.csv_path = file_path
             self.base_dir = os.path.dirname(file_path)
             
-            self.label_status.setText(f"Loaded & Normalized: {os.path.basename(file_path)}")
+            self.label_status.setText(f"Loaded : {os.path.basename(file_path)}")
             self.btn_plot.setEnabled(True)
             self.btn_select.setEnabled(True)
             self.btn_fit.setEnabled(True)
@@ -469,9 +596,91 @@ class FLUPSAnalyzer(QMainWindow):
             self.slider_max.setMaximum(nwl - 1)
             self.slider_min.setValue(0)
             self.slider_max.setValue(nwl - 1)
-    
+            self.update_wl_range()
         except Exception as e:
             QMessageBox.critical(self, "Error loading file", str(e))
+    def apply_wl_range(self):
+        min_val = self.slider_min.value()
+        max_val = self.slider_max.value()
+        print(f"Aplicando λ min={min_val}, λ max={max_val}")
+        # Aquí actualiza tu mapa o cálculos
+
+    def _plot_discrete_map(self, ax, WL, TD, data, n_levels=5, cmap='jet', shading='auto', vmin=None, vmax=None):
+        """Dibuja mapa tipo contourf con pcolormesh discreto."""
+
+        # Forzar límites si se pasan, sino usar datos
+        if vmin is None:
+            vmin = np.nanmin(data)
+        if vmax is None:
+            vmax = np.nanmax(data)
+    
+        levels = np.linspace(vmin, vmax, n_levels)
+        norm = BoundaryNorm(levels, ncolors=plt.get_cmap(cmap).N, clip=True)
+    
+        pcm = ax.pcolormesh(WL, TD, data.T, shading=shading, cmap=cmap, norm=norm)
+        return pcm
+    def update_n_levels(self, value):
+        """Actualiza el número de niveles del mapa discreto y redibuja el mapa, respetando el rango visible."""
+        self.n_levels = value
+        self.lbl_dial.setText(f"{value} levels")  #  actualiza texto
+    
+        if self.data is None:
+            return
+    
+        #  Determinar qué datos y WL usar (respetando el rango visible actual)
+        if hasattr(self, "WL_visible") and self.WL_visible is not None:
+            WL_used = self.WL_visible
+            if getattr(self, "showing_corrected", False):
+                # si estamos mostrando el mapa corregido
+                wl_min = self.WL_visible[0]
+                wl_max = self.WL_visible[-1]
+                wl_min_idx = np.argmin(np.abs(self.WL - wl_min))
+                wl_max_idx = np.argmin(np.abs(self.WL - wl_max)) + 1
+                data_used = self.data_corrected[wl_min_idx:wl_max_idx, :]
+            else:
+                data_used = self.data_visible
+        else:
+            WL_used = self.WL
+            data_used = self.data_corrected if getattr(self, "showing_corrected", False) else self.data
+    
+        #  Redibujar mapa directamente (sin resetear)
+        self.ax_map.clear()
+        if self.cbar:
+            try: self.cbar.remove()
+            except: pass
+            self.cbar = None
+    
+        self.pcm = self._plot_discrete_map(
+            self.ax_map,
+            WL_used,
+            self.TD,
+            data_used,
+            n_levels=self.n_levels,
+            shading="auto",
+            vmin=-1,
+            vmax=1
+        )
+    
+        self.ax_map.set_xlabel("Wavelength (nm)")
+        self.ax_map.set_ylabel("Delay (ps)")
+        self.ax_map.set_title("ΔA Map (FLUPS)")
+        self.ax_map.set_yscale("symlog")
+    
+        #  Colorbar
+        divider = make_axes_locatable(self.ax_map)
+        cax = divider.append_axes("right", size="3%", pad=0.02)
+        self.cbar = self.figure.colorbar(self.pcm, cax=cax, label="ΔA")
+    
+        #  Estilo visual coherente
+        self.ax_map.set_facecolor("white")
+        for spine in self.ax_map.spines.values():
+            spine.set_color("black")
+        self.ax_map.tick_params(colors="black")
+        self.ax_map.xaxis.label.set_color("black")
+        self.ax_map.yaxis.label.set_color("black")
+        self.ax_map.title.set_color("black")
+    
+        self.canvas.draw_idle()
 
 
     def plot_map(self):
@@ -488,7 +697,11 @@ class FLUPSAnalyzer(QMainWindow):
             self.cbar = None
     
         # pcolormesh usando todos los datos, evita problemas de dimensiones
-        self.pcm = self.ax_map.pcolormesh(self.WL, self.TD, self.data.T, shading="auto", cmap="jet")
+        if self.use_discrete_levels:
+            self.pcm = self._plot_discrete_map(self.ax_map, self.WL, self.TD, self.data,n_levels=self.n_levels)
+        else:
+            self.pcm = self.ax_map.pcolormesh(self.WL, self.TD, self.data.T, shading="auto", cmap="jet")
+
         self.ax_map.set_xlabel("Wavelength (nm)")
         self.ax_map.set_ylabel("Delay (ps)")
         self.ax_map.set_yscale("symlog")
@@ -517,19 +730,50 @@ class FLUPSAnalyzer(QMainWindow):
     
     
     def update_wl_range(self):
-        """Actualizar el mapa y subplots pequeños según el rango de λ de los sliders."""
-        if self.data is None:
+        """Actualizar el mapa y subplots pequeños según el rango de λ de los sliders.
+           Además actualiza las etiquetas que muestran las longitudes de onda (nm)."""
+        # si no hay datos aún, solo actualiza etiquetas si es posible (evita crash)
+        if getattr(self, "WL", None) is None or getattr(self, "data", None) is None:
+            # Si las etiquetas existen pero no hay WL definidos, poner guiones
+            if hasattr(self, "lbl_min_value"):
+                self.lbl_min_value.setText("- nm")
+            if hasattr(self, "lbl_max_value"):
+                self.lbl_max_value.setText("- nm")
             return
     
-        wl_min_idx = self.slider_min.value()
-        wl_max_idx = self.slider_max.value()
+        # sliders devuelven índices de WL (según cómo los configuras en load_file)
+        wl_min_idx = int(self.slider_min.value())
+        wl_max_idx = int(self.slider_max.value())
+    
+        # proteger orden y límites
         if wl_min_idx >= wl_max_idx:
             wl_max_idx = wl_min_idx + 1
-        wl_max_idx = min(wl_max_idx + 1, len(self.WL))
     
-        WL_sel = self.WL[wl_min_idx:wl_max_idx]
-        data_sel = self.data[wl_min_idx:wl_max_idx, :]  # (N_wl, N_td)
+        wl_min_idx = max(0, min(wl_min_idx, len(self.WL) - 1))
+        # queremos usar wl_max_idx como índice inclusivo -> limitar a len(WL)-1
+        wl_max_idx = max(0, min(wl_max_idx, len(self.WL) - 1))
     
+        # actualizar etiquetas (valores reales en nm)
+        try:
+            if hasattr(self, "lbl_min_value"):
+                self.lbl_min_value.setText(f"{self.WL[wl_min_idx]:.1f} nm")
+            if hasattr(self, "lbl_max_value"):
+                self.lbl_max_value.setText(f"{self.WL[wl_max_idx]:.1f} nm")
+        except Exception:
+            # fallback: mostrar índices si algo raro pasa con self.WL
+            if hasattr(self, "lbl_min_value"):
+                self.lbl_min_value.setText(f"{wl_min_idx}")
+            if hasattr(self, "lbl_max_value"):
+                self.lbl_max_value.setText(f"{wl_max_idx}")
+    
+        # ahora construimos la selección (nota: slice end no inclusivo por Python)
+        wl_slice_end = wl_max_idx + 1
+        WL_sel = self.WL[wl_min_idx:wl_slice_end]
+        data_sel = self.data[wl_min_idx:wl_slice_end, :]  # (N_wl_selected, N_td)
+        # Guardar los datos visibles actuales para otras funciones (como on_move_map)
+        self.WL_visible = WL_sel
+        self.data_visible = data_sel
+
         # --- limpiar eje y colorbar ---
         self.ax_map.clear()
         if self.cbar:
@@ -545,7 +789,24 @@ class FLUPSAnalyzer(QMainWindow):
         self.marker_map = None
     
         # dibujar mapa filtrado
-        self.pcm = self.ax_map.pcolormesh(WL_sel, self.TD, data_sel.T, shading="auto", cmap="jet")
+        if self.use_discrete_levels:
+            self.pcm = self._plot_discrete_map(
+                self.ax_map,
+                WL_sel,
+                self.TD,
+                data_sel,
+                n_levels=self.n_levels,
+                shading="auto"
+            )
+        else:
+            self.pcm = self.ax_map.pcolormesh(
+                WL_sel,
+                self.TD,
+                data_sel.T,
+                shading="auto",
+                cmap="jet"
+            )
+    
         self.ax_map.set_xlabel("Wavelength (nm)")
         self.ax_map.set_ylabel("Delay (ps)")
         self.ax_map.set_title("ΔA Map (FLUPS)")
@@ -564,10 +825,10 @@ class FLUPSAnalyzer(QMainWindow):
     
         # crear nuevas cruces iniciales (posición central del rango)
         if WL_sel.size > 0:
-            x0 = np.median(WL_sel)
+            x0 = float(np.median(WL_sel))
         else:
-            x0 = self.WL[0]
-        y0 = np.median(self.TD)
+            x0 = float(self.WL[0])
+        y0 = float(np.median(self.TD))
     
         self.vline_map = self.ax_map.axvline(x0, color='k', ls='--', lw=1, zorder=6)
         self.hline_map = self.ax_map.axhline(y0, color='k', ls='--', lw=1, zorder=6)
@@ -577,7 +838,7 @@ class FLUPSAnalyzer(QMainWindow):
         self.update_small_cuts(x0, y0, WL_sel=WL_sel, data_sel=data_sel)
     
         self.canvas.draw_idle()
-
+    
     # interacción: selección de puntos
     def enable_point_selection(self):
         self.clicked_points = []
@@ -585,20 +846,22 @@ class FLUPSAnalyzer(QMainWindow):
             self.cid_click = self.canvas.mpl_connect("button_press_event", self.on_click_map)
         QMessageBox.information(self, "Mode: Select points",
                                 "Click izquierdo: añadir punto\nClick derecho: borrar último punto.\nLuego pulsa 'Fit t₀'.")
-
     def update_small_cuts(self, x, y, WL_sel=None, data_sel=None):
         """Actualiza los subplots pequeños (cinética + espectro) para la posición (x,y)
            usando los datos filtrados por sliders si se pasan."""
         if x is None or y is None:
             return
     
-        # usar datos filtrados si se pasan, sino usar todos
-        if WL_sel is None or data_sel is None:
-            WL_vis = self.WL
-            data_vis = self.data
-        else:
+        #  Prioridad: datos explícitos → rango visible guardado → todos los datos
+        if WL_sel is not None and data_sel is not None:
             WL_vis = WL_sel
             data_vis = data_sel
+        elif hasattr(self, "WL_visible") and self.WL_visible is not None:
+            WL_vis = self.WL_visible
+            data_vis = self.data_visible
+        else:
+            WL_vis = self.WL
+            data_vis = self.data
     
         if WL_vis.size == 0:
             return
@@ -618,6 +881,7 @@ class FLUPSAnalyzer(QMainWindow):
         self.cut_spec_small.set_data(WL_vis, y_spec)
         self.ax_spec_small.relim(); self.ax_spec_small.autoscale_view()
         self.ax_spec_small.set_title(f"Spectra at {self.TD[idx_td]:.2f} ps")
+
     def on_click_map(self, event):
         """Registrar puntos sobre el mapa (izq añade, derecha borra último) y actualizar cortes."""
         if event.inaxes != self.ax_map:
@@ -661,7 +925,11 @@ class FLUPSAnalyzer(QMainWindow):
 
         # --- aquí está la diferencia: actualizar los subplots pequeños ---
         self.update_small_cuts(x, y)
-
+        self.update_small_cuts(
+            x, y,
+            WL_sel=getattr(self, "WL_visible", None),
+            data_sel=getattr(self, "data_visible", None)
+        )
         self.canvas.draw_idle()
 
     def on_move_map(self, event):
@@ -717,10 +985,19 @@ class FLUPSAnalyzer(QMainWindow):
         w_points = np.array([p['x'] for p in self.clicked_points])
         t0_points = np.array([p['y'] for p in self.clicked_points])
 
+        # Determinar qué modelo usar según los radio buttons
+        if self.radio_poly.isChecked():
+            mode = 'poly'
+        elif self.radio_nonlinear.isChecked():
+            mode = 'nonlinear'
+        else:
+            mode = 'auto'
+        
+        # Intentar el ajuste
         try:
-            result = fit_t0(w_points, t0_points, self.WL, self.TD, self.data)
+            result = fit_t0(w_points, t0_points, self.WL, self.TD, self.data, mode=mode)
         except Exception as e:
-            QMessageBox.critical(self, "Fit error", str(e))
+            QMessageBox.critical(self, "Error de ajuste t₀", str(e))
             return
 
         self.result_fit = result
@@ -738,29 +1015,29 @@ class FLUPSAnalyzer(QMainWindow):
 
         # guardado automático (idéntico a tu comportamiento actual)
         self.btn_show_corr.setEnabled(True)
-        import os
+
         base_dir = os.path.dirname(self.file_path)
         base_name = os.path.splitext(os.path.basename(self.file_path))[0]
-        save_dir = os.path.join(base_dir, f"{base_name}_Results")
-        os.makedirs(save_dir, exist_ok=True)
-
+        self.save_dir = os.path.join(base_dir, f"{base_name}_Results")  # 🔹 guardamos como atributo
+        os.makedirs(self.save_dir, exist_ok=True)
+        
         data_corr = result['corrected']
         WL = self.WL
         TD = self.TD
 
-        np.save(os.path.join(save_dir, f"{base_name}_treated_data.npy"),
+        np.save(os.path.join(self.save_dir, f"{base_name}_treated_data.npy"),
                 {'data_c': data_corr, 'WL': WL, 'TD': TD})
 
-        np.savetxt(os.path.join(save_dir, f"{base_name}_WL.txt"), WL,
+        np.savetxt(os.path.join(self.save_dir, f"{base_name}_WL.txt"), WL,
                    fmt='%.6f', header='Wavelength (nm)', comments='')
-        np.savetxt(os.path.join(save_dir, f"{base_name}_TD.txt"), TD,
+        np.savetxt(os.path.join(self.save_dir, f"{base_name}_TD.txt"), TD,
                    fmt='%.6f', header='Delay (ps)', comments='')
 
-        with open(os.path.join(save_dir, f"{base_name}_kin.txt"), 'w') as f:
+        with open(os.path.join(self.save_dir, f"{base_name}_kin.txt"), 'w') as f:
             f.write("\t".join([f"{base_name}_kin_{round(wl,1)}nm" for wl in WL]) + "\n")
             np.savetxt(f, data_corr.T, fmt='%.6e', delimiter='\t')
 
-        with open(os.path.join(save_dir, f"{base_name}_spec.txt"), 'w') as f:
+        with open(os.path.join(self.save_dir, f"{base_name}_spec.txt"), 'w') as f:
             f.write("\t".join([f"{base_name}_spec_{td:.2f}ps" for td in TD]) + "\n")
             np.savetxt(f, data_corr, fmt='%.6e', delimiter='\t')
 
@@ -768,11 +1045,11 @@ class FLUPSAnalyzer(QMainWindow):
         popt = result['popt']
         method = result['method']
 
-        t0_file = os.path.join(save_dir, f"{base_name}_t0_fit.txt")
+        t0_file = os.path.join(self.save_dir, f"{base_name}_t0_fit.txt")
         np.savetxt(t0_file, np.column_stack((WL, t0_lambda)),
                    fmt='%.6f', header='Wavelength (nm)\t t0 (ps)', comments='')
 
-        params_file = os.path.join(save_dir, f"{base_name}_fit_params.txt")
+        params_file = os.path.join(self.save_dir, f"{base_name}_fit_params.txt")
         with open(params_file, 'w') as f:
             f.write(f"Fit method: {method}\n")
             f.write("Fit parameters:\n")
@@ -784,7 +1061,7 @@ class FLUPSAnalyzer(QMainWindow):
                 f.write(f"  {name} = {val:.6g}\n")
 
         QMessageBox.information(self, "Files saved",
-                                f"Results saved in:\n{save_dir}")
+                                f"Results saved in:\n{self.save_dir}")
         QMessageBox.information(self, "t₀ Fit Result",
                                 f"Fit completed using {method} model.\nParameters: {np.round(popt,4)}")
 
@@ -792,31 +1069,64 @@ class FLUPSAnalyzer(QMainWindow):
     def toggle_corrected_map(self):
         """Alterna entre mapa original y corregido dentro de la misma ventana,
            mostrando el mapa limpio y manteniendo crucetas."""
-        
+    
         if self.data_corrected is None:
             QMessageBox.warning(self, "No corrected data", "Run 'Fit t₀' first to generate corrected data.")
             return
     
-        # decidir qué mapa mostrar
+        # ==============================================================
+        # DECIDIR QUÉ MAPA MOSTRAR (RESPETANDO RANGO DE SLIDERS)
+        # ==============================================================
+    
         if getattr(self, "showing_corrected", False):
-            # mostrar original
-            data_to_plot = self.data
+            # Mostrar mapa original
+            if hasattr(self, "WL_visible") and self.WL_visible is not None:
+                wl_min = self.WL_visible[0]
+                wl_max = self.WL_visible[-1]
+                wl_min_idx = np.argmin(np.abs(self.WL - wl_min))
+                wl_max_idx = np.argmin(np.abs(self.WL - wl_max)) + 1
+                WL_used = self.WL_visible
+                data_to_plot = self.data[wl_min_idx:wl_max_idx, :]
+            else:
+                WL_used = self.WL
+                data_to_plot = self.data
+    
             self.showing_corrected = False
             self.btn_show_corr.setText("Show Corrected Map")
+    
         else:
-            # mostrar corregido
-            data_to_plot = np.copy(self.data_corrected)
+            # Mostrar mapa corregido
+            if hasattr(self, "WL_visible") and self.WL_visible is not None:
+                wl_min = self.WL_visible[0]
+                wl_max = self.WL_visible[-1]
+                wl_min_idx = np.argmin(np.abs(self.WL - wl_min))
+                wl_max_idx = np.argmin(np.abs(self.WL - wl_max)) + 1
+                WL_used = self.WL_visible
+                data_to_plot = np.copy(self.data_corrected[wl_min_idx:wl_max_idx, :])
+            else:
+                WL_used = self.WL
+                data_to_plot = np.copy(self.data_corrected)
+    
             self.showing_corrected = True
             self.btn_show_corr.setText("Show Original Map")
     
-        # limpiar eje y colorbar
+        #  Guardar los visibles actuales (para on_move_map, etc.)
+        self.WL_visible = WL_used
+        self.data_visible = data_to_plot
+    
+        # ==============================================================
+        # LIMPIAR MAPA Y COLORBAR
+        # ==============================================================
+    
         self.ax_map.clear()
         if self.cbar:
-            try: self.cbar.remove()
-            except: pass
+            try:
+                self.cbar.remove()
+            except Exception:
+                pass
             self.cbar = None
     
-        # BORRAR puntos seleccionados y línea de fit
+        # Borrar puntos seleccionados y línea de fit
         for p in getattr(self, "clicked_points", []):
             try:
                 p['artist'].remove()
@@ -825,36 +1135,60 @@ class FLUPSAnalyzer(QMainWindow):
         self.clicked_points = []
     
         if self.fit_line_artist is not None:
-            try: self.fit_line_artist.remove()
+            try:
+                self.fit_line_artist.remove()
             except Exception:
                 pass
         self.fit_line_artist = None
-        # decidir rango de color según modo
+    
+        # ==============================================================
+        # ESCALAS DE COLOR
+        # ==============================================================
+    
         if getattr(self, "is_TAS_mode", False):
-            # usar rango real de los datos
-            vmin = np.nanmin(data_to_plot)
-            vmax = np.nanmax(data_to_plot)
-            # margen opcional
-            margin = 0.05 * (vmax - vmin)
-            vmin -= margin
-            vmax += margin
+            finite_vals = data_to_plot[np.isfinite(data_to_plot)]
+            if finite_vals.size == 0:
+                vmin, vmax = -1, 1
+            else:
+                vmin, vmax = np.percentile(finite_vals, [1, 99])
         else:
-            # FLUPS siempre [-1, 1]
             vmin, vmax = -1, 1
-        
-        self.pcm = self.ax_map.pcolormesh(
-            self.WL, self.TD, data_to_plot.T,
-            shading="auto",
-            cmap="jet",
-            vmin=vmin,
-            vmax=vmax
-        )
+    
+        # ==============================================================
+        # DIBUJAR NUEVO MAPA (USANDO WL_visible)
+        # ==============================================================
+    
+        if self.use_discrete_levels:
+            self.pcm = self._plot_discrete_map(
+                self.ax_map,
+                self.WL_visible,
+                self.TD,
+                self.data_visible,
+                n_levels=self.n_levels,
+                shading="auto",
+                vmin=vmin,
+                vmax=vmax
+            )
+        else:
+            self.pcm = self.ax_map.pcolormesh(
+                self.WL_visible,
+                self.TD,
+                self.data_visible.T,
+                shading="auto",
+                cmap="jet",
+                vmin=vmin,
+                vmax=vmax
+            )
+    
         self.ax_map.set_xlabel("Wavelength (nm)")
         self.ax_map.set_ylabel("Delay (ps)")
         self.ax_map.set_title("ΔA Map (FLUPS)")
         self.ax_map.set_yscale("symlog")
     
-        # colorbar
+        # ==============================================================
+        # COLORBAR Y ESTILO
+        # ==============================================================
+    
         divider = make_axes_locatable(self.ax_map)
         cax = divider.append_axes("right", size="3%", pad=0.02)
         self.cbar = self.figure.colorbar(self.pcm, cax=cax, label="ΔA")
@@ -863,7 +1197,6 @@ class FLUPSAnalyzer(QMainWindow):
         for spine in self.cbar.ax.spines.values():
             spine.set_color("black")
     
-        # restaurar estilo de ejes
         self.ax_map.set_facecolor("white")
         self.ax_map.tick_params(colors="black")
         self.ax_map.xaxis.label.set_color("black")
@@ -872,18 +1205,20 @@ class FLUPSAnalyzer(QMainWindow):
         for spine in self.ax_map.spines.values():
             spine.set_color("black")
     
-        # posición actual de crucetas
+        # ==============================================================
+        # CRUCETAS Y EVENTOS
+        # ==============================================================
+    
         if self.vline_map is not None:
             x0 = self.vline_map.get_xdata()[0]
         else:
-            x0 = self.WL[0]
+            x0 = self.WL_visible[0]
     
         if self.hline_map is not None:
             y0 = self.hline_map.get_ydata()[0]
         else:
             y0 = self.TD[0]
     
-        # crucetas y marcador
         self.vline_map = self.ax_map.axvline(x0, color='k', ls='--', lw=1)
         self.hline_map = self.ax_map.axhline(y0, color='k', ls='--', lw=1)
         self.marker_map, = self.ax_map.plot([x0], [y0], 'wx', markersize=8, markeredgewidth=2)
@@ -894,25 +1229,27 @@ class FLUPSAnalyzer(QMainWindow):
         self.ax_time_small.relim(); self.ax_time_small.autoscale_view()
         self.ax_spec_small.relim(); self.ax_spec_small.autoscale_view()
     
-        # conectar eventos para crucetas y subplots
+        # funciones internas de actualización
         def update_small_cuts(x, y):
             if x is None or y is None:
                 return
-            idx_wl = int(np.argmin(np.abs(self.WL - x)))
+            idx_wl = int(np.argmin(np.abs(self.WL_visible - x)))
             idx_td = int(np.argmin(np.abs(self.TD - y)))
-            y_time = data_to_plot[idx_wl, :].ravel()
+            y_time = self.data_visible[idx_wl, :].ravel()
             self.cut_time_small.set_data(self.TD, y_time)
             self.ax_time_small.relim(); self.ax_time_small.autoscale_view()
-            self.ax_time_small.set_title(f"Kinetics at {self.WL[idx_wl]:.1f} nm")
-            y_spec = data_to_plot[:, idx_td].ravel()
-            self.cut_spec_small.set_data(self.WL, y_spec)
+            self.ax_time_small.set_title(f"Kinetics at {self.WL_visible[idx_wl]:.1f} nm")
+            y_spec = self.data_visible[:, idx_td].ravel()
+            self.cut_spec_small.set_data(self.WL_visible, y_spec)
             self.ax_spec_small.relim(); self.ax_spec_small.autoscale_view()
             self.ax_spec_small.set_title(f"Spectra at {self.TD[idx_td]:.2f} ps")
     
         def onclick(event):
-            if event.inaxes != self.ax_map: return
+            if event.inaxes != self.ax_map:
+                return
             x, y = event.xdata, event.ydata
-            if x is None or y is None: return
+            if x is None or y is None:
+                return
             self.vline_map.set_xdata([x, x])
             self.hline_map.set_ydata([y, y])
             self.marker_map.set_data([x], [y])
@@ -920,29 +1257,29 @@ class FLUPSAnalyzer(QMainWindow):
             self.canvas.draw_idle()
     
         def onmove(event):
-            if event.inaxes != self.ax_map: return
+            if event.inaxes != self.ax_map:
+                return
             x, y = event.xdata, event.ydata
-            if x is None or y is None: return
+            if x is None or y is None:
+                return
             self.vline_map.set_xdata([x, x])
             self.hline_map.set_ydata([y, y])
             self.marker_map.set_data([x], [y])
             update_small_cuts(x, y)
             self.canvas.draw_idle()
     
-        # desconectar eventos previos de mapa corregido
+        # desconectar eventos previos
         if hasattr(self, "cid_corr_click") and self.cid_corr_click is not None:
             self.canvas.mpl_disconnect(self.cid_corr_click)
         if hasattr(self, "cid_corr_move") and self.cid_corr_move is not None:
             self.canvas.mpl_disconnect(self.cid_corr_move)
     
-        # conectar nuevos eventos
+        # conectar nuevos
         self.cid_corr_click = self.canvas.mpl_connect("button_press_event", onclick)
         self.cid_corr_move = self.canvas.mpl_connect("motion_notify_event", onmove)
     
         self.canvas.draw_idle()
     
-
-
 class TASAnalyzer(FLUPSAnalyzer):
     def __init__(self):
         super().__init__()
@@ -956,7 +1293,9 @@ class TASAnalyzer(FLUPSAnalyzer):
         self.TDSol = None
         self.WLSol = None
         self.is_TAS_mode = True
-
+        self.use_discrete_levels = False  # Cambia a False si prefieres mapa continuo
+        self.dial_levels.hide()
+        self.lbl_dial.hide()
 
        # --- Sliders extra para AM (amplitud) y SF (shift temporal) ---
         self.slider_am = QSlider(Qt.Horizontal)
@@ -997,16 +1336,66 @@ class TASAnalyzer(FLUPSAnalyzer):
         self.spin_sf.valueChanged.connect(sync_spin_to_slider)
         
         # Layout
+        
         slider_layout_extra = QHBoxLayout()
         slider_layout_extra.addWidget(QLabel("Amplitude (%)"))
         slider_layout_extra.addWidget(self.slider_am)
         slider_layout_extra.addWidget(QLabel("Shift (ps)"))
         slider_layout_extra.addWidget(self.slider_sf)
         slider_layout_extra.addWidget(self.spin_sf)
-        
+ 
+ 
+        # --- Modificar el botón switch (ya existe del padre) ---
+        self.btn_switch.setText("Switch to FLUPS")
         # Añadir sliders adicionales al layout principal
         self.centralWidget().layout().addLayout(slider_layout_extra)
+        # Desconectamos el slot anterior para evitar doble conexión
+        try:
+            self.btn_switch.clicked.disconnect()
+        except TypeError:
+            pass
+        
+        # Conectamos al nuevo método
+        self.btn_switch.clicked.connect(self.switch_analyzer)
 
+    def switch_analyzer(self):
+        """Cambia entre FLUPSAnalyzer y TASAnalyzer sin cerrar la nueva ventana."""
+        try:
+            target_cls_name = "FLUPSAnalyzer" if isinstance(self, TASAnalyzer) else "TASAnalyzer"
+            
+            if target_cls_name in globals() and callable(globals()[target_cls_name]):
+                TargetCls = globals()[target_cls_name]
+            else:
+                raise NameError(f"{target_cls_name} not found")
+
+            # Guarda la referencia en self (no variable local)
+            self.new_window = TargetCls()
+            self.new_window.show()
+
+            # Cierra la ventana actual
+            self.close()
+
+        except Exception as e:
+            QMessageBox.critical(self, "Switch error", f"Cannot switch analyzer:\n{e}")
+
+
+    def get_base_dir(self):
+        """
+        Devuelve la carpeta donde se encuentra el CSV de medida.
+        Crea subcarpetas 'fit' y 'plots' si no existen.
+        """
+
+        if hasattr(self, 'file_path') and self.file_path:
+            base_dir = os.path.dirname(self.file_path)
+        else:
+            base_dir = os.getcwd()
+    
+        fit_dir = os.path.join(base_dir, "fit")
+        plots_dir = os.path.join(base_dir, "plots")
+        os.makedirs(fit_dir, exist_ok=True)
+        os.makedirs(plots_dir, exist_ok=True)
+    
+        return base_dir, fit_dir, plots_dir
     def remove_pump_fringe(self):
         if self.data is None:
             QMessageBox.warning(self, "No data", "Load TAS data first.")
@@ -1036,8 +1425,7 @@ class TASAnalyzer(FLUPSAnalyzer):
     # ------------------------------------------------------------------
     def load_file(self):
         """Carga los ficheros de medida y solvente TAS (CSV o TXT)."""
-        import os
-    
+        
         # --- Seleccionar archivo de medida ---
         file_path_medida, _ = QFileDialog.getOpenFileName(
             self,
@@ -1048,7 +1436,16 @@ class TASAnalyzer(FLUPSAnalyzer):
         if not file_path_medida or not os.path.exists(file_path_medida):
             self.label_status.setText("❌ No measurement file selected.")
             return
-    
+        
+        #  Guardar ruta del primer CSV leído
+        self.file_path = file_path_medida
+        
+        #  Crear carpeta específica para esta medición
+        base_dir = os.path.dirname(self.file_path)
+        base_name = os.path.splitext(os.path.basename(self.file_path))[0]
+        self.results_dir = os.path.join(base_dir, f"{base_name}_results")
+        os.makedirs(self.results_dir, exist_ok=True)
+        
         raw = pd.read_csv(file_path_medida, header=None)
         raw = raw.apply(pd.to_numeric, errors="coerce").dropna(how="any")
         raw = raw.values.astype(float)
@@ -1056,18 +1453,18 @@ class TASAnalyzer(FLUPSAnalyzer):
         self.WL = raw[1:, 0]        # wavelength (nm)
         self.medida = raw[1:, 1:]   # ΔA(λ, t)
         self.medida[np.isnan(self.medida)] = 0
-    
+        
         # --- Seleccionar archivo de solvente ---
         file_path_solvente, _ = QFileDialog.getOpenFileName(
             self,
             "Select Solvent CSV",
-            "",
+            os.path.dirname(self.file_path),  # ✅ Abre el diálogo en la misma carpeta
             "CSV Files (*.csv);;Data Files (*.txt *.dat)"
         )
         if not file_path_solvente or not os.path.exists(file_path_solvente):
-            self.label_status.setText("❌ No solvent file selected.")
+            self.label_status.setText(" No solvent file selected.")
             return
-    
+        
         rawSol = pd.read_csv(file_path_solvente, header=None)
         rawSol = rawSol.apply(pd.to_numeric, errors="coerce").dropna(how="any")
         rawSol = rawSol.values.astype(float)
@@ -1075,7 +1472,7 @@ class TASAnalyzer(FLUPSAnalyzer):
         self.WLSol = rawSol[1:, 0]
         self.solvente = rawSol[1:, 1:]
         self.solvente[np.isnan(self.solvente)] = 0
-    
+        
         # --- Configurar sliders de λ ---
         nwl = len(self.WL)
         self.slider_min.setMinimum(0)
@@ -1084,14 +1481,15 @@ class TASAnalyzer(FLUPSAnalyzer):
         self.slider_max.setMaximum(nwl - 1)
         self.slider_min.setValue(0)
         self.slider_max.setValue(nwl - 1)
-    
+        
         # --- Calcular mapa inicial ---
-        self.label_status.setText("✅ TAS data loaded")
+        self.label_status.setText(" TAS data loaded")
         self.update_am_sf()
-    
+        self.plot_map()
+        
         # --- Definir ruta base para compatibilidad con FLUPSAnalyzer ---
         self.file_path = file_path_medida
-    
+        
         # --- Asegurar que los botones t₀ funcionan ---
         if hasattr(self, "btn_plot"):
             self.btn_plot.setEnabled(True)
@@ -1099,6 +1497,11 @@ class TASAnalyzer(FLUPSAnalyzer):
             self.btn_select.setEnabled(True)
         if hasattr(self, "btn_fit"):
             self.btn_fit.setEnabled(True)
+        
+        #  Mostrar solo el nombre del archivo cargado
+        file_name = os.path.basename(file_path_medida)
+        self.label_status.setText(f"TAS data loaded from: {file_name}")
+
 
     def fit_t0_points(self):
         if not getattr(self, "clicked_points", None) or len(self.clicked_points) < 2:
@@ -1109,38 +1512,35 @@ class TASAnalyzer(FLUPSAnalyzer):
         t0_points = np.array([p['y'] for p in self.clicked_points])
     
         try:
-            # aplicar corrección t0 sobre self.data ya con fringe eliminado
-            self.update_am_sf()  # asegura que pump_mask se aplique antes del fit
+            # recalcular base antes del fit
+            self.update_am_sf()
             result = fit_t0(w_points, t0_points, self.WL, self.TD, self.data)
         except Exception as e:
             QMessageBox.critical(self, "Fit error", str(e))
             return
     
+        # --- Guardar datos corregidos globalmente ---
         self.result_fit = result
         self.data_corrected = result['corrected']
-    
-        # dibujar curva del fit sobre mapa
-        if self.fit_line_artist is not None:
-            try: self.fit_line_artist.remove()
-            except Exception: pass
-        self.fit_line_artist, = self.ax_map.plot(result['fit_x'], result['fit_y'], 'r-', lw=2, label="t₀ fit")
-        self.ax_map.legend()
-        self.canvas.draw_idle()
-    
-        # guardar datos
+        self.data = np.copy(self.data_corrected)
+        self.plot_map(show_fit=True)
         self.btn_show_corr.setEnabled(True)
-        import os
+    
+        # --- Crear carpeta de resultados junto al CSV ---
         base_dir = os.path.dirname(self.file_path)
         base_name = os.path.splitext(os.path.basename(self.file_path))[0]
-        save_dir = os.path.join(base_dir, f"{base_name}_Results")
+        save_dir = os.path.join(base_dir, f"{base_name}_results")
         os.makedirs(save_dir, exist_ok=True)
     
-        # asegurarse de guardar la data con fringe eliminado
-        self.update_am_sf()  # ✅ aplicamos pump_mask
-        data_corr = np.copy(self.data)  # guardamos copia segura
+        # --- Guardar matrices y resultados ---
+        data_corr = np.copy(self.data_corrected)
         WL = self.WL
         TD = self.TD
+        t0_lambda = result['t0_lambda']
+        popt = result['popt']
+        method = result['method']
     
+        #  Guardar archivos principales
         np.save(os.path.join(save_dir, f"{base_name}_treated_data.npy"),
                 {'data_c': data_corr, 'WL': WL, 'TD': TD})
     
@@ -1149,24 +1549,16 @@ class TASAnalyzer(FLUPSAnalyzer):
         np.savetxt(os.path.join(save_dir, f"{base_name}_TD.txt"), TD,
                    fmt='%.6f', header='Delay (ps)', comments='')
     
-        with open(os.path.join(save_dir, f"{base_name}_kin.txt"), 'w') as f:
-            f.write("\t".join([f"{base_name}_kin_{round(wl,1)}nm" for wl in WL]) + "\n")
-            np.savetxt(f, data_corr.T, fmt='%.6e', delimiter='\t')
+        np.savetxt(os.path.join(save_dir, f"{base_name}_kin.txt"),
+                   data_corr.T, fmt='%.6e', delimiter='\t')
+        np.savetxt(os.path.join(save_dir, f"{base_name}_spec.txt"),
+                   data_corr, fmt='%.6e', delimiter='\t')
     
-        with open(os.path.join(save_dir, f"{base_name}_spec.txt"), 'w') as f:
-            f.write("\t".join([f"{base_name}_spec_{td:.2f}ps" for td in TD]) + "\n")
-            np.savetxt(f, data_corr, fmt='%.6e', delimiter='\t')
-    
-        t0_lambda = result['t0_lambda']
-        popt = result['popt']
-        method = result['method']
-    
-        t0_file = os.path.join(save_dir, f"{base_name}_t0_fit.txt")
-        np.savetxt(t0_file, np.column_stack((WL, t0_lambda)),
+        np.savetxt(os.path.join(save_dir, f"{base_name}_t0_fit.txt"),
+                   np.column_stack((WL, t0_lambda)),
                    fmt='%.6f', header='Wavelength (nm)\t t0 (ps)', comments='')
     
-        params_file = os.path.join(save_dir, f"{base_name}_fit_params.txt")
-        with open(params_file, 'w') as f:
+        with open(os.path.join(save_dir, f"{base_name}_fit_params.txt"), 'w') as f:
             f.write(f"Fit method: {method}\n")
             f.write("Fit parameters:\n")
             if method.startswith('poly'):
@@ -1177,9 +1569,10 @@ class TASAnalyzer(FLUPSAnalyzer):
                 f.write(f"  {name} = {val:.6g}\n")
     
         QMessageBox.information(self, "Files saved",
-                                f"Results saved in:\n{save_dir}")
+                                f" Results saved in:\n{save_dir}")
         QMessageBox.information(self, "t₀ Fit Result",
                                 f"Fit completed using {method} model.\nParameters: {np.round(popt,4)}")
+
 
     # ------------------------------------------------------------------
     # ACTUALIZACIÓN DE MAPA TRAS SLIDERS
@@ -1205,11 +1598,22 @@ class TASAnalyzer(FLUPSAnalyzer):
         points = np.column_stack([WL_grid.ravel(), (TD_grid - sf).ravel()])
         solvente_interp = interpSol(points).reshape(len(self.WL), len(self.TD)) * am
     
-        self.data = self.medida - solvente_interp
+        # Base: medida - solvente
+        base_data = self.medida - solvente_interp
     
-        # aplicar máscara si existe
+        # Aplicar máscara si existe
         if self.pump_mask is not None:
-            self.data[self.pump_mask] = 1e-10
+            base_data[self.pump_mask] = 1e-10
+    
+        # Si existe data corregida (fit t₀), usarla
+        if hasattr(self, "data_corrected") and self.data_corrected is not None:
+            self.data = np.copy(self.data_corrected)
+            # Reaplicar solvente y máscara encima de la corrección
+            self.data -= (self.medida - base_data)  # sustrae solo la parte del solvente
+            if self.pump_mask is not None:
+                self.data[self.pump_mask] = 1e-10
+        else:
+            self.data = base_data
     
         self.update_wl_range()
     
@@ -1217,70 +1621,84 @@ class TASAnalyzer(FLUPSAnalyzer):
             self.global_fit_panel.update_from_parent()
     
         self._updating_am_sf = False
+
     # ------------------------------------------------------------------
     # DIBUJAR MAPA ΔA
     # ------------------------------------------------------------------
     def plot_map(self, show_fit=False):
-        """Dibuja el mapa principal TAS sin normalizar y con subplots ajustados."""
+        """Dibuja el mapa principal TAS con crucetas y fit persistentes."""
         if self.data is None:
             return
     
+        # --- Guardar estado previo (crucetas y fit) ---
+        x_cross, y_cross = None, None
+        if hasattr(self, "vline_map") and self.vline_map is not None:
+            x_cross = self.vline_map.get_xdata()[0]
+        if hasattr(self, "hline_map") and self.hline_map is not None:
+            y_cross = self.hline_map.get_ydata()[0]
+    
+        # --- Limpiar eje principal ---
         self.ax_map.clear()
         if self.cbar:
-            try:
-                self.cbar.remove()
-            except Exception:
-                pass
+            try: self.cbar.remove()
+            except Exception: pass
             self.cbar = None
     
-        # Escala real de los datos con pequeño margen
+        # Escala real con margen
         vmin = np.nanmin(self.data)
         vmax = np.nanmax(self.data)
         margin = 0.05 * (vmax - vmin)
         vmin -= margin
         vmax += margin
     
-        # Dibujar pcolormesh
+        # Dibujar mapa
         self.pcm = self.ax_map.pcolormesh(
             self.WL, self.TD, self.data.T,
-            shading="auto",
-            cmap="jet",
-            vmin=vmin,
-            vmax=vmax
+            shading="auto", cmap="jet",
+            vmin=vmin, vmax=vmax
         )
     
         self.ax_map.set_xlabel("Wavelength (nm)")
         self.ax_map.set_ylabel("Delay (ps)")
         self.ax_map.set_title("ΔA Map (TAS)")
-        self.ax_map.set_yscale("symlog")
-    
+        # self.ax_map.set_yscale("symlog")
+        self.ax_map.set_ylim(-1, 10)
         # Colorbar
         divider = make_axes_locatable(self.ax_map)
         cax = divider.append_axes("right", size="5%", pad=0.05)
         self.cbar = self.figure.colorbar(self.pcm, cax=cax, label="ΔA")
     
-        # Líneas cruzadas y marcador iniciales
-        x0 = np.median(self.WL)
-        y0 = np.median(self.TD)
-        self.vline_map = self.ax_map.axvline(x0, color='k', ls='--', lw=1, zorder=6)
-        self.hline_map = self.ax_map.axhline(y0, color='k', ls='--', lw=1, zorder=6)
-        self.marker_map, = self.ax_map.plot([x0], [y0], 'wx', markersize=8, markeredgewidth=2, zorder=7)
+        # --- Restaurar crucetas ---
+        if x_cross is None:
+            x_cross = np.median(self.WL)
+        if y_cross is None:
+            y_cross = np.median(self.TD)
     
-        # Mostrar fit si existe
-        if show_fit and hasattr(self, 'result_fit') and self.result_fit is not None:
-            fit_x = self.result_fit.get('fit_x', None)
-            fit_y = self.result_fit.get('fit_y', None)
+        self.vline_map = self.ax_map.axvline(x_cross, color="k", ls="--", lw=1, zorder=6)
+        self.hline_map = self.ax_map.axhline(y_cross, color="k", ls="--", lw=1, zorder=6)
+        self.marker_map, = self.ax_map.plot([x_cross], [y_cross], "wx",
+                                            markersize=8, markeredgewidth=2, zorder=7)
+    
+        if hasattr(self, "result_fit") and self.result_fit is not None:
+            fit_x = self.result_fit.get("fit_x", None)
+            fit_y = self.result_fit.get("fit_y", None)
             if fit_x is not None and fit_y is not None:
-                if hasattr(self, 'fit_line_artist') and self.fit_line_artist is not None:
-                    try: self.fit_line_artist.remove()
-                    except: pass
-                self.fit_line_artist, = self.ax_map.plot(fit_x, fit_y, 'r-', lw=2, label="t₀ fit")
+                # --- Dibujar el fit temporalmente en escala lineal ---
+                prev_scale = self.ax_map.get_yscale()
+                self.ax_map.set_yscale("linear")
+        
+                self.fit_line_artist, = self.ax_map.plot(
+                    fit_x, fit_y, "r-", lw=2, label="t₀ fit", zorder=10
+                )
+        
+                # --- Restaurar la escala original (symlog) ---
+                self.ax_map.set_yscale(prev_scale)
                 self.ax_map.legend()
+
+        # Actualizar subplots pequeños
+        self.update_small_cuts(x_cross, y_cross)
     
-        # Ajustar subplots pequeños al rango real
-        self.update_small_cuts(x0, y0)
-    
-        # Conectar eventos si no lo estaban
+        # Reconectar eventos
         if self.cid_click is None:
             self.cid_click = self.canvas.mpl_connect("button_press_event", self.on_click_map)
         if self.cid_move is None:
@@ -1288,19 +1706,18 @@ class TASAnalyzer(FLUPSAnalyzer):
     
         self.canvas.draw_idle()
 
-
     def update_small_cuts(self, x, y, WL_sel=None, data_sel=None):
         """Actualiza los subplots de cinética y espectro para la posición (x, y)."""
         if x is None or y is None or self.data is None:
             return
     
-        # Si no se pasan, usar sliders por defecto
+        # --- Subconjunto según sliders ---
         if WL_sel is None or data_sel is None:
             wl_min_idx = self.slider_min.value()
             wl_max_idx = self.slider_max.value()
             wl_max_idx = min(wl_max_idx + 1, len(self.WL))
             WL_sel = self.WL[wl_min_idx:wl_max_idx]
-            data_sel = self.data[wl_min_idx:wl_max_idx, :]  # (n_wl_visible, n_td)
+            data_sel = self.data[wl_min_idx:wl_max_idx, :]
     
         if WL_sel.size == 0:
             return
@@ -1308,19 +1725,28 @@ class TASAnalyzer(FLUPSAnalyzer):
         idx_wl = np.argmin(np.abs(WL_sel - x))
         idx_td = np.argmin(np.abs(self.TD - y))
     
-        # Cinética (fila idx_wl)
+        # --- Cinética ---
         y_time = data_sel[idx_wl, :]
         self.cut_time_small.set_data(self.TD, y_time)
         self.ax_time_small.relim()
         self.ax_time_small.autoscale_view()
         self.ax_time_small.set_title(f"Kinetics at {WL_sel[idx_wl]:.1f} nm")
     
-        # Espectro (columna idx_td)
+        #  Dibujar o actualizar la línea de tiempo
+        if not hasattr(self, "vline_time_small") or self.vline_time_small is None:
+            self.vline_time_small = self.ax_time_small.axvline(
+                x=y, color='k', ls='--', lw=1.2, zorder=5)
+        else:
+            self.vline_time_small.set_xdata([y, y])
+            self.vline_time_small.set_visible(True)
+    
+        # --- Espectro ---
         y_spec = data_sel[:, idx_td]
         self.cut_spec_small.set_data(WL_sel, y_spec)
         self.ax_spec_small.relim()
         self.ax_spec_small.autoscale_view()
         self.ax_spec_small.set_title(f"Spectra at {self.TD[idx_td]:.2f} ps")
+    
     
         self.canvas.draw_idle()
 
@@ -1357,19 +1783,12 @@ class TASAnalyzer(FLUPSAnalyzer):
         # Actualizar subplots
         self.update_small_cuts(x, y)
         
-# -*- coding: utf-8 -*-
-"""
-GlobalFitPanel - PyQt5 dialog that reproduces the behavior of your Tk script
-Embedded colormesh (Experimental/Fit/Residual tabs) + external DAS/residuals figures.
-Author: generated for you (adapted to your project)
-Requires: fit.py (with eval_global_model, convolved_exp, crop_spectrum, crop_kinetics, binning, load_npy)
-"""
 
 
 class GlobalFitPanel(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Global Fit — FLUPS")
+        self.setWindowTitle("Global Fit")
         self.resize(1000, 700)
 
         # Data placeholders: prefer parent's data if present
@@ -1378,7 +1797,18 @@ class GlobalFitPanel(QDialog):
         self.TD = None
         self.WL = None
         self.base_dir = None
-
+        # --- Determinar carpeta base de guardado ---
+        if hasattr(parent, "save_dir") and parent.save_dir:
+            #  Usa la carpeta de resultados del programa principal
+            self.base_dir = parent.save_dir
+        elif hasattr(parent, "file_path") and parent.file_path:
+            #  Si no hay save_dir pero sí un archivo cargado
+            base_name = os.path.splitext(os.path.basename(parent.file_path))[0]
+            self.base_dir = os.path.join(os.path.dirname(parent.file_path), f"{base_name}_Results")
+            os.makedirs(self.base_dir, exist_ok=True)
+        else:
+            # ⚠️ Fallback: si no hay nada, usa el directorio actual
+            self.base_dir = os.getcwd()
         # fit-related
         self.numExp = 3
         self.t0_choice = 'No'
@@ -1539,7 +1969,7 @@ class GlobalFitPanel(QDialog):
                 cbar.remove()
         except Exception:
             pass
-
+    
     def _update_exp_canvas(self):
         """Draw experimental colormesh on the Experimental tab without normalizing."""
         if self.data_c is None:
@@ -1548,14 +1978,21 @@ class GlobalFitPanel(QDialog):
         self.ax_exp.clear()
         self._clear_colorbar_if_exists(self.cbar_exp)
     
-        # Escala real de los datos con margen
-        vmin = np.nanmin(self.data_c)
-        vmax = np.nanmax(self.data_c)
-        margin = 0.05 * (vmax - vmin)
-        vmin -= margin
-        vmax += margin
+        # --- Detectar técnica ---
+        tech = "TAS" if getattr(self.parent_app, "is_TAS_mode", False) else "FLUPS"
     
-        # pcolormesh
+        # --- Ajustar escala según técnica ---
+        if tech == "FLUPS":
+            vmin, vmax = -1, 1
+        else:  # TAS u otra
+            vmin = np.nanmin(self.data_c)
+            vmax = np.nanmax(self.data_c)
+            # margen pequeño para que no se corte
+            margin = 0.05 * (vmax - vmin)
+            vmin -= margin
+            vmax += margin
+    
+        # --- Dibujar mapa ---
         self.pcm_exp = self.ax_exp.pcolormesh(
             self.WL, self.TD, self.data_c.T,
             shading="auto",
@@ -1567,13 +2004,14 @@ class GlobalFitPanel(QDialog):
         self.ax_exp.set_xlabel("Wavelength (nm)")
         self.ax_exp.set_ylabel("Delay (ps)")
         self.ax_exp.set_yscale("symlog")
-        self.ax_exp.set_title("Experimental ΔA")
+        self.ax_exp.set_title(f"Experimental ΔA ({tech})")
     
         divider = make_axes_locatable(self.ax_exp)
         cax = divider.append_axes("right", size="5%", pad=0.05)
         self.cbar_exp = self.canvas_exp.figure.colorbar(self.pcm_exp, cax=cax, label='ΔA')
     
         self.canvas_exp.draw_idle()
+
 
 
 
@@ -1905,23 +2343,9 @@ class GlobalFitPanel(QDialog):
         self._update_resid_canvas()
         self.btn_show_das.setEnabled(True)
     
-        # --- Guardar outputs en la carpeta del CSV cargado ---
-        base_dir = getattr(self, "base_dir", None)
-        
-        # Si no existe o es None, intenta recuperar desde el parent_app
-        if not base_dir:
-            if hasattr(self, "parent_app") and self.parent_app is not None:
-                p = self.parent_app
-                if hasattr(p, "base_dir") and p.base_dir:
-                    base_dir = p.base_dir
-                elif hasattr(p, "csv_path") and p.csv_path:
-                    base_dir = os.path.dirname(p.csv_path)
-        
-        # Fallback final: el directorio actual (donde está el .py)
-        if not base_dir:
-            base_dir = os.getcwd()
-        
-        print("Guardando resultados en:", base_dir)
+        # --- Usar la carpeta base determinada al inicio ---
+        base_dir = self.base_dir
+        print(f" Guardando resultados en: {base_dir}")
         
         outdir = os.path.join(base_dir, "fit")
         os.makedirs(outdir, exist_ok=True)
@@ -1964,23 +2388,9 @@ class GlobalFitPanel(QDialog):
             QMessageBox.warning(self, "No fit", "Run a fit first.")
             return
     
-        # --- Carpeta donde se guardarán los gráficos ---
-        base_dir = getattr(self, "base_dir", None)
-        
-        # Si no está definida, intenta recuperarla desde el parent_app
-        if not base_dir:
-            if hasattr(self, "parent_app") and self.parent_app is not None:
-                p = self.parent_app
-                if hasattr(p, "base_dir") and p.base_dir:
-                    base_dir = p.base_dir
-                elif hasattr(p, "csv_path") and p.csv_path:
-                    base_dir = os.path.dirname(p.csv_path)
-        
-        # Fallback final: si todo falla, usa el directorio actual
-        if not base_dir:
-            base_dir = os.getcwd()
-        
-        print("Guardando gráficos en:", base_dir)
+        # ---  Usar directamente la carpeta _Results creada por FLUPSAnalyzer ---
+        base_dir = self.base_dir
+        print(f" Guardando resultados en: {base_dir}")
 
         outdir = os.path.join(base_dir, "Plots")
         os.makedirs(outdir, exist_ok=True)
@@ -2067,9 +2477,20 @@ class GlobalFitPanel(QDialog):
             ax1.set_xlabel("Time / ps")
             ax1.set_ylabel("ΔA")
             plt.tight_layout()
-            fname = os.path.join(outdir, f"Fit_{int(round(self.WL[pos3]))}nm.png")
-            plt.savefig(fname, dpi=200)
+            
+            # --- Guardar figura ---
+            fname_img = os.path.join(outdir, f"Fit_{int(round(self.WL[pos3]))}nm.png")
+            plt.savefig(fname_img, dpi=200)
+            
+            # --- Guardar datos numéricos (Delay, Exp, Fit) ---
+            fname_txt = os.path.join(outdir, f"Fit_{int(round(self.WL[pos3]))}nm.txt")
+            with open(fname_txt, "w") as ftxt:
+                ftxt.write("# TD(ps)\tExp(A)\tFit(A)\n")
+                for td, exp, fitv in zip(self.TD, self.data_c[pos3, :], self.fit_fitres[pos3, :]):
+                    ftxt.write(f"{td:.6e}\t{exp:.6e}\t{fitv:.6e}\n")
+            
             plt.show(block=True)
+
             # ask to continue
             resp = QMessageBox.question(self, "Continue", "Choose another wavelength?", QMessageBox.Yes | QMessageBox.No)
             if resp != QMessageBox.Yes:

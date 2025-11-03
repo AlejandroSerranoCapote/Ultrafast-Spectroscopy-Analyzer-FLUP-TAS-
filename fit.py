@@ -134,3 +134,4 @@ def run_fit(data_c, TD, numExp, numWL, ini, limi, lims, t0_choice):
     fitres = eval_global_model(x, TD, numExp, numWL, t0_choice).T
     resid = data_c - fitres
     return x, fitres, resid, result
+
