@@ -104,7 +104,6 @@ Tras ejecutar un ajuste de *t₀* y un análisis global, se crea una carpeta:
 ## 🧠 Notas adicionales
 
 - Los archivos `.npy` pueden cargarse directamente en Python con `numpy.load()`.  
-- Las versiones en texto (`.txt`, `.csv`) están normalizadas para compatibilidad con **Origin**, **Igor Pro**, **MATLAB** y **Python**.  
 - Los nombres de las carpetas se generan automáticamente según el archivo de entrada.
 
 ---
