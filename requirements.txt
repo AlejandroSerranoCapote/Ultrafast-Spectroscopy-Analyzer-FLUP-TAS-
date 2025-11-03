@@ -8,4 +8,4 @@ PyQt5>=5.15
 
 # --- Herramientas opcionales de empaquetado ---
 pyinstaller>=6.0
-auto-py-to-exe>=2.42
+
