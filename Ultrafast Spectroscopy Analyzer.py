@@ -2236,40 +2236,53 @@ class GlobalFitPanel(QDialog):
 
         dlg.exec_()
 
+
     def _run_least_squares_with_progress(self):
         """Run least_squares directly using fit.eval_global_model as model,
-        so we can pass a callback to update the progress bar."""
-        # build residual function (keeps same flatten ordering as script)
+        with optional callback for progress update (compatible with older SciPy)."""
+        import inspect
         numWL = len(self.WL)
         TD = self.TD
         data_flat = self.data_c.T.flatten()
-
+    
         def residuals(x):
             F = fit.eval_global_model(x, TD, self.numExp, numWL, self.t0_choice)
             return F.flatten() - data_flat
-
-        # progress bookkeeping
+    
+        # --- progress bookkeeping ---
         self.progress_bar.setValue(0)
-        iterations = {'count':0}
-
+        iterations = {'count': 0}
+    
         def callback(xk, *args, **kwargs):
             iterations['count'] += 1
-            # update value cyclically if no better estimate of total
             val = (iterations['count'] % 100)
             self.progress_bar.setValue(val)
-            QTimer.singleShot(1, lambda: None)  # keep UI responsive
-
+            QTimer.singleShot(1, lambda: None)  # keeps UI responsive
+    
         try:
-            # call least_squares (verbose left out; we show our own progress)
-            res = least_squares(residuals, self.ini, bounds=(self.limi, self.lims), jac='2-point', callback=callback)
+            # --- detect if least_squares supports the 'callback' argument ---
+            lsq_signature = inspect.signature(least_squares)
+            kwargs = dict(
+                fun=residuals,
+                x0=self.ini,
+                bounds=(self.limi, self.lims),
+                jac='2-point',
+            )
+    
+            if "callback" in lsq_signature.parameters:
+                kwargs["callback"] = callback  # ✅ use it if available
+    
+            res = least_squares(**kwargs)
+    
         except Exception as e:
             QMessageBox.critical(self, "Optimization error", str(e))
             raise
-
+    
         # finalize progress bar
         self.progress_bar.setValue(100)
         self.fit_result = res
         self.fit_x = res.x
+
 
     def _postprocess_fit_and_save(self):
         """Compute fitres, resid, covariance, As, t0s, taus and save outputs."""
