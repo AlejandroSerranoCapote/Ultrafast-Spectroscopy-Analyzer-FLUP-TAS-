@@ -8,7 +8,9 @@ Permite trabajar con dos técnicas experimentales complementarias:
 
 La aplicación integra un entorno gráfico interactivo que facilita la corrección del chirp temporal (*t₀*), la sustracción del solvente, la eliminación del *pump scattering* y la visualización en tiempo real del mapa espectro-temporal.  
 Además, permite realizar análisis globales ajustando los datos a un modelo multiexponencial, obteniendo los **DAS (Decay-Associated Spectra)** correspondientes a cada componente cinética.
-
+```math
+\Delta A(t, \lambda) = \sum_{i=1}^{n} A_i(\lambda) e^{-t/\tau_i}
+```
 ---
 
 ## ✨ Características principales
