@@ -26,13 +26,13 @@ from PyQt5.QtWidgets import (
     QPushButton, QLabel, QFileDialog, QMessageBox, QSlider, QInputDialog,
     QDialog, QTabWidget, QProgressBar, QTableWidget, QTableWidgetItem,
     QHeaderView, QComboBox, QDoubleSpinBox, QFrame,QSpinBox,QDial,QSpacerItem, QSizePolicy
-    ,QGroupBox, QHBoxLayout, QRadioButton
+    ,QGroupBox, QHBoxLayout, QRadioButton,QCheckBox
 )
 from PyQt5.QtGui import QFont, QPalette, QColor
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtWidgets import QLineEdit, QLabel, QHBoxLayout
 import fit
-from core_analysis import fit_t0, load_data
+from core_analysis import fit_t0, load_data,eV_a_nm
 from PyQt5.QtWidgets import QLineEdit, QLabel, QHBoxLayout
 import time
 from matplotlib.colors import BoundaryNorm
@@ -1357,7 +1357,12 @@ class TASAnalyzer(FLUPSAnalyzer):
         
         # Conectamos al nuevo método
         self.btn_switch.clicked.connect(self.switch_analyzer)
+    # === Checkbox para conversión automática de .dat → .csv ===
+        self.chk_convert_dat = QCheckBox("Convert .dat → .csv (IMDEA DATA)")
+        self.chk_convert_dat.setChecked(True)  # activado por defecto
 
+        # Insertarlo en el layout arriba o donde prefieras
+        self.centralWidget().layout().addWidget(self.chk_convert_dat)
     def switch_analyzer(self):
         """Cambia entre FLUPSAnalyzer y TASAnalyzer sin cerrar la nueva ventana."""
         try:
@@ -1378,7 +1383,31 @@ class TASAnalyzer(FLUPSAnalyzer):
         except Exception as e:
             QMessageBox.critical(self, "Switch error", f"Cannot switch analyzer:\n{e}")
 
+    def convert_dat_to_csv(self, file_path):
+        """Convierte un archivo .dat en un .csv con el formato TAS."""
+        try:
+            data = np.loadtxt(file_path)
+    
+            # wl = primera columna
+            wl = data[:, 0]
+    
+            # t = primera fila (ps)
+            t = data[0] * 1e-3
 
+            # Reemplazar en la matriz
+            data[:, 0] = wl
+            data[0, :] = t
+    
+            # Crear ruta .csv
+            csv_path = os.path.splitext(file_path)[0] + ".csv"
+    
+            # Guardar
+            np.savetxt(csv_path, data, delimiter=",")
+            return csv_path
+    
+        except Exception as e:
+            QMessageBox.critical(self, "Conversion error", f"Cannot convert .dat:\n{e}")
+            return None
     def get_base_dir(self):
         """
         Devuelve la carpeta donde se encuentra el CSV de medida.
@@ -1436,7 +1465,11 @@ class TASAnalyzer(FLUPSAnalyzer):
         if not file_path_medida or not os.path.exists(file_path_medida):
             self.label_status.setText("❌ No measurement file selected.")
             return
-        
+        # --- Conversión automática .dat → .csv si la opción está activada ---
+        if self.chk_convert_dat.isChecked() and file_path_medida.lower().endswith(".dat"):
+            new_path = self.convert_dat_to_csv(file_path_medida)
+            if new_path:
+                file_path_medida = new_path
         #  Guardar ruta del primer CSV leído
         self.file_path = file_path_medida
         
@@ -1449,7 +1482,7 @@ class TASAnalyzer(FLUPSAnalyzer):
         raw = pd.read_csv(file_path_medida, header=None)
         raw = raw.apply(pd.to_numeric, errors="coerce").dropna(how="any")
         raw = raw.values.astype(float)
-        self.TD = raw[0, 1:]        # delay (ps)
+        self.TD = raw[0, 1:]       # delay (ps)
         self.WL = raw[1:, 0]        # wavelength (nm)
         self.medida = raw[1:, 1:]   # ΔA(λ, t)
         self.medida[np.isnan(self.medida)] = 0
@@ -1464,7 +1497,10 @@ class TASAnalyzer(FLUPSAnalyzer):
         if not file_path_solvente or not os.path.exists(file_path_solvente):
             self.label_status.setText(" No solvent file selected.")
             return
-        
+        if self.chk_convert_dat.isChecked() and file_path_solvente.lower().endswith(".dat"):
+            new_path = self.convert_dat_to_csv(file_path_solvente)
+            if new_path:
+                file_path_solvente = new_path        
         rawSol = pd.read_csv(file_path_solvente, header=None)
         rawSol = rawSol.apply(pd.to_numeric, errors="coerce").dropna(how="any")
         rawSol = rawSol.values.astype(float)
