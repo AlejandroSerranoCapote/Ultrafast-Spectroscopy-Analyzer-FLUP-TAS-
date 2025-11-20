@@ -1068,7 +1068,7 @@ class FLUPSAnalyzer(QMainWindow):
 
     def toggle_corrected_map(self):
         """Alterna entre mapa original y corregido dentro de la misma ventana,
-           mostrando el mapa limpio y manteniendo crucetas."""
+            mostrando el mapa limpio y manteniendo crucetas."""
     
         if self.data_corrected is None:
             QMessageBox.warning(self, "No corrected data", "Run 'Fit t₀' first to generate corrected data.")
@@ -1077,42 +1077,41 @@ class FLUPSAnalyzer(QMainWindow):
         # ==============================================================
         # DECIDIR QUÉ MAPA MOSTRAR (RESPETANDO RANGO DE SLIDERS)
         # ==============================================================
-    
+        
+        # Determinar la matriz que representa los datos base/originales.
+        # En TAS, self.data es la matriz solvente-corregida (Base Data).
+        # self.data_corrected es la matriz t0-corregida.
+        
         if getattr(self, "showing_corrected", False):
-            # Mostrar mapa original
-            if hasattr(self, "WL_visible") and self.WL_visible is not None:
-                wl_min = self.WL_visible[0]
-                wl_max = self.WL_visible[-1]
-                wl_min_idx = np.argmin(np.abs(self.WL - wl_min))
-                wl_max_idx = np.argmin(np.abs(self.WL - wl_max)) + 1
-                WL_used = self.WL_visible
-                data_to_plot = self.data[wl_min_idx:wl_max_idx, :]
-            else:
-                WL_used = self.WL
-                data_to_plot = self.data
-    
+            # Mostrar mapa original (Base Data: solvente-corregida)
+            data_source = self.data
             self.showing_corrected = False
             self.btn_show_corr.setText("Show Corrected Map")
-    
+            title_suffix = "(Base/Original)"
         else:
-            # Mostrar mapa corregido
-            if hasattr(self, "WL_visible") and self.WL_visible is not None:
-                wl_min = self.WL_visible[0]
-                wl_max = self.WL_visible[-1]
-                wl_min_idx = np.argmin(np.abs(self.WL - wl_min))
-                wl_max_idx = np.argmin(np.abs(self.WL - wl_max)) + 1
-                WL_used = self.WL_visible
-                data_to_plot = np.copy(self.data_corrected[wl_min_idx:wl_max_idx, :])
-            else:
-                WL_used = self.WL
-                data_to_plot = np.copy(self.data_corrected)
-    
+            # Mostrar mapa corregido (t0-corregida)
+            data_source = self.data_corrected
             self.showing_corrected = True
-            self.btn_show_corr.setText("Show Original Map")
+            self.btn_show_corr.setText("Show Base/Original Map")
+            title_suffix = "(t₀ Corrected)"
     
-        #  Guardar los visibles actuales (para on_move_map, etc.)
+        # Aplicar el filtro de rango de longitud de onda
+        if hasattr(self, "WL_visible") and self.WL_visible is not None:
+            wl_min = self.WL_visible[0]
+            wl_max = self.WL_visible[-1]
+            wl_min_idx = np.argmin(np.abs(self.WL - wl_min))
+            wl_max_idx = np.argmin(np.abs(self.WL - wl_max)) + 1
+            
+            WL_used = self.WL_visible
+            data_to_plot = data_source[wl_min_idx:wl_max_idx, :]
+        else:
+            # Si no hay rango visible guardado, usar todos los datos
+            WL_used = self.WL
+            data_to_plot = data_source
+            
+        # Guardar los datos visibles actuales (para on_move_map, etc.)
         self.WL_visible = WL_used
-        self.data_visible = data_to_plot
+        self.data_visible = np.copy(data_to_plot)
     
         # ==============================================================
         # LIMPIAR MAPA Y COLORBAR
@@ -1126,7 +1125,7 @@ class FLUPSAnalyzer(QMainWindow):
                 pass
             self.cbar = None
     
-        # Borrar puntos seleccionados y línea de fit
+        # Borrar puntos seleccionados y línea de fit (mantener lógica FLUPS)
         for p in getattr(self, "clicked_points", []):
             try:
                 p['artist'].remove()
@@ -1146,12 +1145,14 @@ class FLUPSAnalyzer(QMainWindow):
         # ==============================================================
     
         if getattr(self, "is_TAS_mode", False):
-            finite_vals = data_to_plot[np.isfinite(data_to_plot)]
+            finite_vals = self.data_visible[np.isfinite(self.data_visible)]
             if finite_vals.size == 0:
                 vmin, vmax = -1, 1
             else:
+                # Usar 1% y 99% para evitar outliers extremos
                 vmin, vmax = np.percentile(finite_vals, [1, 99])
         else:
+            # FLUPS mode (datos normalizados)
             vmin, vmax = -1, 1
     
         # ==============================================================
@@ -1182,13 +1183,17 @@ class FLUPSAnalyzer(QMainWindow):
     
         self.ax_map.set_xlabel("Wavelength (nm)")
         self.ax_map.set_ylabel("Delay (ps)")
-        self.ax_map.set_title("ΔA Map (FLUPS)")
+        
+        # 🌟 CORRECCIÓN DEL TÍTULO: Usar la técnica correcta
+        tech_name = "TAS" if getattr(self, "is_TAS_mode", False) else "FLUPS"
+        self.ax_map.set_title(f"ΔA Map ({tech_name}) {title_suffix}")
+        
         self.ax_map.set_yscale("symlog")
     
         # ==============================================================
-        # COLORBAR Y ESTILO
+        # COLORBAR, ESTILO, CRUCETAS Y EVENTOS (Sin cambios en esta sección)
         # ==============================================================
-    
+        
         divider = make_axes_locatable(self.ax_map)
         cax = divider.append_axes("right", size="3%", pad=0.02)
         self.cbar = self.figure.colorbar(self.pcm, cax=cax, label="ΔA")
@@ -1201,14 +1206,10 @@ class FLUPSAnalyzer(QMainWindow):
         self.ax_map.tick_params(colors="black")
         self.ax_map.xaxis.label.set_color("black")
         self.ax_map.yaxis.label.set_color("black")
-        self.ax_map.title.set_color("black")
         for spine in self.ax_map.spines.values():
             spine.set_color("black")
     
-        # ==============================================================
-        # CRUCETAS Y EVENTOS
-        # ==============================================================
-    
+        # Restaurar/crear crucetas
         if self.vline_map is not None:
             x0 = self.vline_map.get_xdata()[0]
         else:
@@ -1229,10 +1230,9 @@ class FLUPSAnalyzer(QMainWindow):
         self.ax_time_small.relim(); self.ax_time_small.autoscale_view()
         self.ax_spec_small.relim(); self.ax_spec_small.autoscale_view()
     
-        # funciones internas de actualización
-        def update_small_cuts(x, y):
-            if x is None or y is None:
-                return
+        # Redefinición de funciones internas y reconexión de eventos
+        def update_small_cuts_visual(x, y):
+            if x is None or y is None: return
             idx_wl = int(np.argmin(np.abs(self.WL_visible - x)))
             idx_td = int(np.argmin(np.abs(self.TD - y)))
             y_time = self.data_visible[idx_wl, :].ravel()
@@ -1244,39 +1244,42 @@ class FLUPSAnalyzer(QMainWindow):
             self.ax_spec_small.relim(); self.ax_spec_small.autoscale_view()
             self.ax_spec_small.set_title(f"Spectra at {self.TD[idx_td]:.2f} ps")
     
-        def onclick(event):
-            if event.inaxes != self.ax_map:
-                return
+        def onclick_corr(event):
+            if event.inaxes != self.ax_map: return
             x, y = event.xdata, event.ydata
-            if x is None or y is None:
-                return
+            if x is None or y is None: return
             self.vline_map.set_xdata([x, x])
             self.hline_map.set_ydata([y, y])
             self.marker_map.set_data([x], [y])
-            update_small_cuts(x, y)
+            update_small_cuts_visual(x, y)
             self.canvas.draw_idle()
     
-        def onmove(event):
-            if event.inaxes != self.ax_map:
-                return
+        def onmove_corr(event):
+            if event.inaxes != self.ax_map: return
             x, y = event.xdata, event.ydata
-            if x is None or y is None:
-                return
+            if x is None or y is None: return
             self.vline_map.set_xdata([x, x])
             self.hline_map.set_ydata([y, y])
             self.marker_map.set_data([x], [y])
-            update_small_cuts(x, y)
+            update_small_cuts_visual(x, y)
             self.canvas.draw_idle()
     
-        # desconectar eventos previos
-        if hasattr(self, "cid_corr_click") and self.cid_corr_click is not None:
-            self.canvas.mpl_disconnect(self.cid_corr_click)
-        if hasattr(self, "cid_corr_move") and self.cid_corr_move is not None:
-            self.canvas.mpl_disconnect(self.cid_corr_move)
+        # Desconectar eventos previos
+        # Es crucial que las desconexiones manejen la posibilidad de que los IDs
+        # cid_click/cid_move (de la base) sean usados o los cid_corr_... (de esta función)
+        
+        # Desconexión para los eventos de la base FLUPSAnalyzer
+        if self.cid_click is not None:
+             self.canvas.mpl_disconnect(self.cid_click)
+             self.cid_click = None # Se usa onclick_corr en su lugar
     
-        # conectar nuevos
-        self.cid_corr_click = self.canvas.mpl_connect("button_press_event", onclick)
-        self.cid_corr_move = self.canvas.mpl_connect("motion_notify_event", onmove)
+        if self.cid_move is not None:
+            self.canvas.mpl_disconnect(self.cid_move)
+            self.cid_move = None # Se usa onmove_corr en su lugar
+    
+        # Conectar los nuevos eventos (se guardan en variables específicas para esta función)
+        self.cid_corr_click = self.canvas.mpl_connect("button_press_event", onclick_corr)
+        self.cid_corr_move = self.canvas.mpl_connect("motion_notify_event", onmove_corr)
     
         self.canvas.draw_idle()
     
@@ -1539,6 +1542,7 @@ class TASAnalyzer(FLUPSAnalyzer):
         self.label_status.setText(f"TAS data loaded from: {file_name}")
 
 
+    # En TASAnalyzer (reemplazar la versión actual)
     def fit_t0_points(self):
         if not getattr(self, "clicked_points", None) or len(self.clicked_points) < 2:
             QMessageBox.warning(self, "Not enough points", "Select at least 2 points on the map.")
@@ -1548,27 +1552,31 @@ class TASAnalyzer(FLUPSAnalyzer):
         t0_points = np.array([p['y'] for p in self.clicked_points])
     
         try:
-            # recalcular base antes del fit
-            self.update_am_sf()
+            # Re-calcular la base (self.data) con el solvente/shift más reciente
+            self.update_am_sf() 
+            
+            # Usar self.data (Base Data: solvente-corregida) para el fit
             result = fit_t0(w_points, t0_points, self.WL, self.TD, self.data)
         except Exception as e:
             QMessageBox.critical(self, "Fit error", str(e))
             return
     
+        
         # --- Guardar datos corregidos globalmente ---
         self.result_fit = result
         self.data_corrected = result['corrected']
-        self.data = np.copy(self.data_corrected)
+        # ⚠️ LÍNEA ELIMINADA: La línea 'self.data = np.copy(self.data_corrected)' se elimina.
+        # Ahora self.data_corrected mantiene los datos finales y self.data los base.
+        
         self.plot_map(show_fit=True)
         self.btn_show_corr.setEnabled(True)
     
-        # --- Crear carpeta de resultados junto al CSV ---
+        # --- Crear carpeta de resultados junto al CSV y guardar ---
         base_dir = os.path.dirname(self.file_path)
         base_name = os.path.splitext(os.path.basename(self.file_path))[0]
         save_dir = os.path.join(base_dir, f"{base_name}_results")
         os.makedirs(save_dir, exist_ok=True)
     
-        # --- Guardar matrices y resultados ---
         data_corr = np.copy(self.data_corrected)
         WL = self.WL
         TD = self.TD
@@ -1576,24 +1584,19 @@ class TASAnalyzer(FLUPSAnalyzer):
         popt = result['popt']
         method = result['method']
     
-        #  Guardar archivos principales
         np.save(os.path.join(save_dir, f"{base_name}_treated_data.npy"),
                 {'data_c': data_corr, 'WL': WL, 'TD': TD})
-    
         np.savetxt(os.path.join(save_dir, f"{base_name}_WL.txt"), WL,
-                   fmt='%.6f', header='Wavelength (nm)', comments='')
+                    fmt='%.6f', header='Wavelength (nm)', comments='')
         np.savetxt(os.path.join(save_dir, f"{base_name}_TD.txt"), TD,
-                   fmt='%.6f', header='Delay (ps)', comments='')
-    
+                    fmt='%.6f', header='Delay (ps)', comments='')
         np.savetxt(os.path.join(save_dir, f"{base_name}_kin.txt"),
-                   data_corr.T, fmt='%.6e', delimiter='\t')
+                    data_corr.T, fmt='%.6e', delimiter='\t')
         np.savetxt(os.path.join(save_dir, f"{base_name}_spec.txt"),
-                   data_corr, fmt='%.6e', delimiter='\t')
-    
+                    data_corr, fmt='%.6e', delimiter='\t')
         np.savetxt(os.path.join(save_dir, f"{base_name}_t0_fit.txt"),
-                   np.column_stack((WL, t0_lambda)),
-                   fmt='%.6f', header='Wavelength (nm)\t t0 (ps)', comments='')
-    
+                    np.column_stack((WL, t0_lambda)),
+                    fmt='%.6f', header='Wavelength (nm)\t t0 (ps)', comments='')
         with open(os.path.join(save_dir, f"{base_name}_fit_params.txt"), 'w') as f:
             f.write(f"Fit method: {method}\n")
             f.write("Fit parameters:\n")
@@ -1608,11 +1611,13 @@ class TASAnalyzer(FLUPSAnalyzer):
                                 f" Results saved in:\n{save_dir}")
         QMessageBox.information(self, "t₀ Fit Result",
                                 f"Fit completed using {method} model.\nParameters: {np.round(popt,4)}")
+        
 
 
     # ------------------------------------------------------------------
     # ACTUALIZACIÓN DE MAPA TRAS SLIDERS
-    # ------------------------------------------------------------------
+        # ------------------------------------------------------------------
+    # En TASAnalyzer (reemplazar la versión actual)
     def update_am_sf(self):
         if self.medida is None or self.solvente is None:
             return
@@ -1640,24 +1645,16 @@ class TASAnalyzer(FLUPSAnalyzer):
         # Aplicar máscara si existe
         if self.pump_mask is not None:
             base_data[self.pump_mask] = 1e-10
+        
+        # Se elimina todo el bloque 'if hasattr(self, "data_corrected") ...' que causaba el doble cálculo.
+        self.data = base_data 
     
-        # Si existe data corregida (fit t₀), usarla
-        if hasattr(self, "data_corrected") and self.data_corrected is not None:
-            self.data = np.copy(self.data_corrected)
-            # Reaplicar solvente y máscara encima de la corrección
-            self.data -= (self.medida - base_data)  # sustrae solo la parte del solvente
-            if self.pump_mask is not None:
-                self.data[self.pump_mask] = 1e-10
-        else:
-            self.data = base_data
-    
-        self.update_wl_range()
+        self.update_wl_range() 
     
         if hasattr(self, "global_fit_panel") and self.global_fit_panel is not None:
             self.global_fit_panel.update_from_parent()
     
         self._updating_am_sf = False
-
     # ------------------------------------------------------------------
     # DIBUJAR MAPA ΔA
     # ------------------------------------------------------------------
@@ -1958,30 +1955,42 @@ class GlobalFitPanel(QDialog):
         self.update_from_parent()
         self.btn_run.setEnabled(True)
         self.btn_show_das.setEnabled(False)
-    
+        
     def update_from_parent(self):
         """Actualizar data_c con los datos actuales de TAS o FLUPS"""
         p = self.parent_app
         if p is None:
             return
-    
+        
+        # La lógica de carga debe ser la misma para ambos: Priorizar data_corrected
+        # (que es el resultado final del t0-fit) y usar data (Base/Solvente corregida) como fallback.
+        
         if getattr(p, "is_TAS_mode", False):
-            if hasattr(p, "data") and p.data is not None:
-                self.data_c = np.array(p.data, copy=True)
-            else:
-                return
-        else:  # FLUPS
+            # 🌟 CORRECCIÓN APLICADA: Comprobar data_corrected primero en modo TAS
             if hasattr(p, "data_corrected") and p.data_corrected is not None:
                 self.data_c = np.array(p.data_corrected, copy=True)
+                self.label_status.setText("Loaded: TAS t₀-Corrected")
             elif hasattr(p, "data") and p.data is not None:
                 self.data_c = np.array(p.data, copy=True)
+                self.label_status.setText("Loaded: TAS Base Data (No t₀ Fit)")
             else:
+                self.label_status.setText("No data loaded")
                 return
-    
+        else:  # FLUPS
+            # Esta lógica ya era correcta: Prioriza data_corrected
+            if hasattr(p, "data_corrected") and p.data_corrected is not None:
+                self.data_c = np.array(p.data_corrected, copy=True)
+                self.label_status.setText("Loaded: FLUPS t₀-Corrected")
+            elif hasattr(p, "data") and p.data is not None:
+                self.data_c = np.array(p.data, copy=True)
+                self.label_status.setText("Loaded: FLUPS Base Data")
+            else:
+                self.label_status.setText("No data loaded")
+                return
+        
         self.WL = getattr(p, "WL", None)
         self.TD = getattr(p, "TD", None)
         self._update_exp_canvas()
-
 
 
     def load_data(self):
