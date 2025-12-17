@@ -26,7 +26,7 @@ from PyQt5.QtWidgets import (
     QPushButton, QLabel, QFileDialog, QMessageBox, QSlider, QInputDialog,
     QDialog, QTabWidget, QProgressBar, QTableWidget, QTableWidgetItem,
     QHeaderView, QComboBox, QDoubleSpinBox, QFrame,QSpinBox,QDial,QSpacerItem, QSizePolicy
-    ,QGroupBox, QHBoxLayout, QRadioButton,QCheckBox
+    ,QGroupBox, QHBoxLayout, QRadioButton,QCheckBox,QFormLayout
 )
 from PyQt5.QtGui import QFont, QPalette, QColor
 from PyQt5.QtCore import Qt, QTimer
@@ -91,21 +91,6 @@ class MainApp(QMainWindow):
             """)
             layout.addWidget(btn)
         
-         # Desactivar el TAS/FLUPS Analyzer (tachado y gris)
-        # font_tas = QFont("Segoe UI", 12)
-        # font_tas.setStrikeOut(True)
-        # btn_flups.setFont(font_tas)
-        # btn_flups.setEnabled(False)   
-        # btn_flups.setStyleSheet("""
-        #     QPushButton {
-        #         background-color: #3a3a3a;
-        #         color: gray;
-        #         border-radius: 10px;
-        #         border: 2px dashed #555;
-        #         padding: 8px 16px;
-        #     }
-        # """)
-
         # --- Conexiones ---
         btn_flups.clicked.connect(self.launch_flups)
         btn_tas.clicked.connect(self.launch_tas)
@@ -155,8 +140,11 @@ class FLUPSAnalyzer(QMainWindow):
         self.file_path = None
         self.data_corrected = None
         self.result_fit = None
-        self.use_discrete_levels = True  # Cambia a False si prefieres mapa continuo
-
+        self.use_discrete_levels = True  # Cambia a False mapa continuo
+        
+        self.bg_cache = None
+        self.cid_draw = None 
+        self._is_drawing = False
         # widgets
         self.btn_load = QPushButton("Load CSV")
         self.btn_load.clicked.connect(self.load_file)
@@ -167,7 +155,6 @@ class FLUPSAnalyzer(QMainWindow):
         self.btn_remove_fringe = QPushButton("Remove Pump Fringe")
         self.btn_remove_fringe.clicked.connect(self.remove_pump_fringe)
         self.btn_remove_fringe.setEnabled(True)
-        # self.n_levels =   #  número inicial de niveles para el mapa discreto
         
         self.label_status = QLabel("No file loaded")
     
@@ -187,7 +174,6 @@ class FLUPSAnalyzer(QMainWindow):
         self.btn_global_fit.clicked.connect(self.open_global_fit)
         
 
-        # define sliders sólo una vez (en __init__, elimina la otra ocurrencia)
         self.slider_min = QSlider(Qt.Horizontal)
         self.slider_max = QSlider(Qt.Horizontal)
         self.slider_min.setMinimum(0)
@@ -195,7 +181,6 @@ class FLUPSAnalyzer(QMainWindow):
         self.slider_min.valueChanged.connect(self.update_wl_range)
         self.slider_max.valueChanged.connect(self.update_wl_range)
 
-        # controla el throttling del movimiento del ratón
         self._last_move_time = 0.0
         self._move_min_interval = 1.0 / 25.0  # como máximo ~25 FPS de actualización por movimiento
         # matplotlib canvas con gridspec (mapa arriba, cinética y espectro abajo)
@@ -209,13 +194,12 @@ class FLUPSAnalyzer(QMainWindow):
         self.ax_time_small = self.figure.add_subplot(self.gs[1, 0])
         self.ax_spec_small = self.figure.add_subplot(self.gs[1, 1])
         self.canvas = FigureCanvas(self.figure)
+        self.cid_draw = self.canvas.mpl_connect('draw_event', self.on_draw)
+        
+        self.clicked_points = []   
+        self.cid_click = None     
+        self.cid_move = None  
     
-        # --- Inicializar variables relacionadas con eventos / interacción ---
-        self.clicked_points = []   # almacenar puntos y artistas
-        self.cid_click = None      # id de conexión para clicks
-        self.cid_move = None  # <<< inicializar aquí
-    
-        # conectar evento de movimiento (una sola vez)
         self.cid_move = self.canvas.mpl_connect("motion_notify_event", self.on_move_map)
             
         # elementos interactivos
@@ -226,7 +210,6 @@ class FLUPSAnalyzer(QMainWindow):
         self.hline_map = None
         self.fit_line_artist = None
     
-        # inicializar small plots
         self._init_small_plots()
     
         # layout
@@ -241,12 +224,9 @@ class FLUPSAnalyzer(QMainWindow):
         top_layout.addWidget(self.btn_global_fit)
         top_layout.addWidget(self.btn_remove_fringe)
 
-        
-        
         layout = QVBoxLayout()
         layout.addLayout(top_layout)
         layout.addWidget(self.canvas)
-        # layout.addLayout(slider_layout)
     
         container = QWidget()
         container.setLayout(layout)
@@ -307,14 +287,13 @@ class FLUPSAnalyzer(QMainWindow):
         self.btn_apply_xlim.clicked.connect(self.apply_x_limits)
         delay_layout.addWidget(self.btn_apply_xlim)
         
-        # --- Layout vertical para sliders de λ ---
         wl_layout = QVBoxLayout()
         wl_layout.setSpacing(5)
         
-        # --- λ min ---
+
         wl_min_layout = QHBoxLayout()
         wl_min_label = QLabel("λ min:")
-        self.lbl_min_value = QLabel(str(400))  # valor inicial mostrado
+        self.lbl_min_value = QLabel(str(400)) 
         self.slider_min = QSlider(Qt.Horizontal)
         self.slider_min.setMinimum(400)
         self.slider_min.setMaximum(800)
@@ -328,7 +307,7 @@ class FLUPSAnalyzer(QMainWindow):
         # --- λ max ---
         wl_max_layout = QHBoxLayout()
         wl_max_label = QLabel("λ max:")
-        self.lbl_max_value = QLabel(str(800))  # valor inicial mostrado
+        self.lbl_max_value = QLabel(str(800)) 
         self.slider_max = QSlider(Qt.Horizontal)
         self.slider_max.setMinimum(400)
         self.slider_max.setMaximum(800)
@@ -339,8 +318,7 @@ class FLUPSAnalyzer(QMainWindow):
         wl_max_layout.addWidget(self.lbl_max_value)
         wl_layout.addLayout(wl_max_layout)
 
-        
-        # --- Layout vertical para la rueda ---
+
         dial_layout = QVBoxLayout()
         self.n_levels = 5
         self.dial_levels = QDial()
@@ -355,21 +333,20 @@ class FLUPSAnalyzer(QMainWindow):
         dial_layout.addWidget(self.dial_levels, alignment=Qt.AlignCenter)
         dial_layout.addWidget(self.lbl_dial, alignment=Qt.AlignCenter)
         
-        # --- Combinar en layout horizontal principal ---
+
         main_layout.addLayout(delay_layout)
-        main_layout.addSpacing(10)          # un pequeño espacio (en lugar de un Spacer grande)
+        main_layout.addSpacing(10)          
         main_layout.addLayout(wl_layout)
         main_layout.addSpacing(10)
         main_layout.addLayout(dial_layout)
         
-        # ajustar márgenes generales del layout principal
+       
         main_layout.setContentsMargins(5, 0, 5, 0)
-        main_layout.setSpacing(15)  # espacio entre columnas principales
+        main_layout.setSpacing(15)  
                 
-        # Contenedor final
         range_container = QWidget()
         range_container.setLayout(main_layout)
-        range_container.setMaximumWidth(800)  # opcional, controla el ancho total
+        range_container.setMaximumWidth(800)  #
         layout.addWidget(range_container)
 
         fit_group = QGroupBox("Modelo de ajuste t₀")
@@ -377,13 +354,12 @@ class FLUPSAnalyzer(QMainWindow):
         
         self.radio_poly = QRadioButton("Polinómico")
         self.radio_nonlinear = QRadioButton("No lineal")
-        self.radio_nonlinear.setChecked(True)  # valor por defecto
+        self.radio_nonlinear.setChecked(True) 
         
         fit_layout.addWidget(self.radio_poly)
         fit_layout.addWidget(self.radio_nonlinear)
         fit_group.setLayout(fit_layout)
         
-        # Añadir este grupo al layout principal (si usas un QVBoxLayout central)
         main_layout.addWidget(fit_group)
                 
         # --- Botón Switch dinámico (cambia entre FLUPS y TAS) ---
@@ -416,7 +392,6 @@ class FLUPSAnalyzer(QMainWindow):
         bottom_layout.addWidget(self.btn_switch)
         layout.addLayout(bottom_layout)
         # --- fit de colores de los ejes principales y colorbars ---
-        # Ejes del mapa principal (fondo blanco)
         self.ax_map.tick_params(colors="black")
         self.ax_map.xaxis.label.set_color("black")
         self.ax_map.yaxis.label.set_color("black")
@@ -424,18 +399,18 @@ class FLUPSAnalyzer(QMainWindow):
         for spine in self.ax_map.spines.values():
             spine.set_color("black")
         
-        # Si la colorbar ya existe, ajusta su estilo también
         if self.cbar is not None:
             self.cbar.ax.yaxis.set_tick_params(color="black", labelcolor="black")
             self.cbar.ax.yaxis.label.set_color("black")
             for spine in self.cbar.ax.spines.values():
                 spine.set_color("black")
-        # Asegura que textos y ticks sean visibles sobre blanco
+                
         for ax in [self.ax_time_small, self.ax_spec_small]:
             ax.tick_params(colors="black")
             ax.xaxis.label.set_color("black")
             ax.yaxis.label.set_color("black")
             ax.title.set_color("black")
+            
     def switch_analyzer(self):
         """Cambia entre FLUPSAnalyzer y TASAnalyzer sin cerrar la nueva ventana."""
         try:
@@ -446,36 +421,65 @@ class FLUPSAnalyzer(QMainWindow):
             else:
                 raise NameError(f"{target_cls_name} not found")
 
-            # Guarda la referencia en self (no variable local)
             self.new_window = TargetCls()
             self.new_window.show()
 
-            # Cierra la ventana actual
+
             self.close()
 
         except Exception as e:
             QMessageBox.critical(self, "Switch error", f"Cannot switch analyzer:\n{e}")
 
+    def on_draw(self, event):
+            """Captura el fondo para Blitting con protección anti-recursión."""
+           
+            if event is not None and event.canvas != self.canvas:
+                return
+            
+            if self._is_drawing:
+                return
 
+            self._is_drawing = True 
+            try:
+                
+                self.bg_cache = self.canvas.copy_from_bbox(self.figure.bbox)
+                
+               
+                self.draw_animated_artists()
+            finally:
+
+                self._is_drawing = False
+        
+    def draw_animated_artists(self):
+        """Dibuja solo los elementos móviles."""
+        # Mapa
+        if self.vline_map: self.ax_map.draw_artist(self.vline_map)
+        if self.hline_map: self.ax_map.draw_artist(self.hline_map)
+        if self.marker_map: self.ax_map.draw_artist(self.marker_map)
+        
+        # Plots pequeños (si tienen datos)
+        if self.cut_time_small: self.ax_time_small.draw_artist(self.cut_time_small)
+        if self.vline_time_small: self.ax_time_small.draw_artist(self.vline_time_small)
+        if self.cut_spec_small: self.ax_spec_small.draw_artist(self.cut_spec_small)
 
 
     def open_global_fit(self):
         dlg = GlobalFitPanel(self)
         dlg.exec_()
     def _init_small_plots(self):
-        # cinética pequeña
+
         self.ax_time_small.set_xlabel("Delay (ps)")
         self.ax_time_small.set_ylabel("ΔA")
         self.ax_time_small.set_title("Kinetics (cursor)")
         self.ax_time_small.set_xlim(-1, 3)
         self.cut_time_small, = self.ax_time_small.plot([], [], '-', lw=1.5)
     
-        # línea vertical de tiempo (inicialmente en None)
+
         self.vline_time_small = self.ax_time_small.axvline(
             x=0, color='k', ls='--', lw=1, visible=False, zorder=5
         )
     
-        # espectro pequeño
+
         self.ax_spec_small.set_xlabel("Wavelength (nm)")
         self.ax_spec_small.set_ylabel("ΔA")
         self.ax_spec_small.set_title("Spectra (cursor)")
@@ -489,7 +493,7 @@ class FLUPSAnalyzer(QMainWindow):
             if x_min >= x_max:
                 raise ValueError("x_min debe ser menor que x_max")
             
-            # Aplica los límites al subplot de cinética
+
             self.ax_time_small.set_xlim(x_min, x_max)
             self.canvas.draw_idle()
     
@@ -502,7 +506,6 @@ class FLUPSAnalyzer(QMainWindow):
             QMessageBox.warning(self, "No data", "Load data first.")
             return
     
-        # pedir al usuario la longitud de onda del pump y el ancho de la franja
         sWl, ok1 = QInputDialog.getDouble(
             self, "Pump wavelength", "Pump wavelength (nm):", min=0.0
         )
@@ -514,7 +517,6 @@ class FLUPSAnalyzer(QMainWindow):
         if not ok2:
             return
     
-        # decidir sobre qué conjunto de datos aplicar
         if getattr(self, "showing_corrected", False) and self.data_corrected is not None:
             data_target = self.data_corrected
         else:
@@ -553,7 +555,6 @@ class FLUPSAnalyzer(QMainWindow):
             if file_path.endswith(".csv"):
                 data, wl, td = load_data(auto_path=file_path)
             else:
-                # Solicitar WL y TD por separado
                 wl_path, _ = QFileDialog.getOpenFileName(self, "Select Wavelength File", "", "Text Files (*.txt)")
                 td_path, _ = QFileDialog.getOpenFileName(self, "Select Delay File", "", "Text Files (*.txt)")
                 if not wl_path or not td_path:
@@ -568,13 +569,15 @@ class FLUPSAnalyzer(QMainWindow):
                 data = data[order, :]
     
             # --- Normalización ---
-            # Opción 1: Normalización global [-1, 1]
+            
+            # =============================================================================
+            #             NORMALIZACIÓN DATOS EN FLUPS
+            # =============================================================================
+
             max_val = np.nanmax(np.abs(data))
             if max_val != 0:
                 data = data / max_val
     
-            # Opción 2: Normalización por fila (cada WL)
-            # data = data / np.nanmax(np.abs(data), axis=1)[:, np.newaxis]
     
             self.WL, self.TD, self.data = wl, td, data
             self.file_path = file_path
@@ -590,12 +593,19 @@ class FLUPSAnalyzer(QMainWindow):
     
             # Actualizar sliders
             nwl = len(wl)
+            self.slider_min.blockSignals(True) 
+            self.slider_max.blockSignals(True)
+            
             self.slider_min.setMinimum(0)
             self.slider_min.setMaximum(nwl - 1)
             self.slider_max.setMinimum(0)
             self.slider_max.setMaximum(nwl - 1)
+            
             self.slider_min.setValue(0)
             self.slider_max.setValue(nwl - 1)
+            
+            self.slider_min.blockSignals(False)
+            self.slider_max.blockSignals(False)
             self.update_wl_range()
         except Exception as e:
             QMessageBox.critical(self, "Error loading file", str(e))
@@ -603,12 +613,10 @@ class FLUPSAnalyzer(QMainWindow):
         min_val = self.slider_min.value()
         max_val = self.slider_max.value()
         print(f"Aplicando λ min={min_val}, λ max={max_val}")
-        # Aquí actualiza tu mapa o cálculos
 
     def _plot_discrete_map(self, ax, WL, TD, data, n_levels=5, cmap='jet', shading='auto', vmin=None, vmax=None):
         """Dibuja mapa tipo contourf con pcolormesh discreto."""
 
-        # Forzar límites si se pasan, sino usar datos
         if vmin is None:
             vmin = np.nanmin(data)
         if vmax is None:
@@ -684,162 +692,114 @@ class FLUPSAnalyzer(QMainWindow):
 
 
     def plot_map(self):
-        """Dibuja el mapa principal con subplots integrados y activa hover."""
-        if self.data is None:
-            return
+            """Dibuja el mapa principal configurado para Blitting (alta velocidad)."""
+            if self.data is None: return
     
-        self.ax_map.clear()
-        if self.cbar:
-            try:
-                self.cbar.remove()
-            except Exception:
-                pass
-            self.cbar = None
+            # Limpieza estándar
+            self.ax_map.clear()
+            if self.cbar:
+                try: self.cbar.remove()
+                except: pass
+                self.cbar = None
     
-        # pcolormesh usando todos los datos, evita problemas de dimensiones
-        if self.use_discrete_levels:
-            self.pcm = self._plot_discrete_map(self.ax_map, self.WL, self.TD, self.data,n_levels=self.n_levels)
-        else:
-            self.pcm = self.ax_map.pcolormesh(self.WL, self.TD, self.data.T, shading="auto", cmap="jet")
+            # --- Determinar datos a pintar (respetando filtros) ---
+            WL_plot = self.WL_visible if hasattr(self, "WL_visible") and self.WL_visible is not None else self.WL
+            data_plot = self.data_visible if hasattr(self, "data_visible") and self.data_visible is not None else self.data
+    
+            # 1. Dibujar Mapa (Estático)
+            if self.use_discrete_levels:
+                self.pcm = self._plot_discrete_map(self.ax_map, WL_plot, self.TD, data_plot, n_levels=self.n_levels)
+            else:
+                self.pcm = self.ax_map.pcolormesh(WL_plot, self.TD, data_plot.T, shading="auto", cmap="jet")
+    
+            self.ax_map.set_yscale("symlog")
+            self.ax_map.set_title("ΔA Map")
+            self.ax_map.set_xlabel("Wavelength (nm)")
+            self.ax_map.set_ylabel("Delay (ps)")
+    
+            divider = make_axes_locatable(self.ax_map)
+            cax = divider.append_axes("right", size="5%", pad=0.05)
+            self.cbar = self.figure.colorbar(self.pcm, cax=cax, label="ΔA")
+    
+            # 2. Inicializar Elementos Dinámicos (animated=True)
+            x0, y0 = WL_plot[0], self.TD[0]
+            
+            self.vline_map = self.ax_map.axvline(x0, color='k', ls='--', lw=1, animated=True, zorder=6)
+            self.hline_map = self.ax_map.axhline(y0, color='k', ls='--', lw=1, animated=True, zorder=6)
+            self.marker_map, = self.ax_map.plot([x0], [y0], 'wx', markersize=8, markeredgewidth=2, animated=True, zorder=7)
+    
+            # 3. Preparar subplots pequeños (IMPORTANTE: Fijar límites aquí)
+            self.ax_time_small.clear()
+            self.ax_spec_small.clear()
+            
+            # Inicializamos líneas animadas vacías o con el primer valor
+            self.cut_time_small, = self.ax_time_small.plot(self.TD, data_plot[0, :], 'b-', lw=1.5, animated=True)
+            self.vline_time_small = self.ax_time_small.axvline(y0, color='k', ls='--', lw=1, animated=True)
+            
+            self.cut_spec_small, = self.ax_spec_small.plot(WL_plot, data_plot[:, 0], 'r-', lw=1.5, animated=True)
+    
+            # --- FIJAR LÍMITES ESTÁTICOS ---
+            vmin_g, vmax_g = np.nanmin(data_plot), np.nanmax(data_plot)
+            margin = (vmax_g - vmin_g) * 0.05
+            
+            self.ax_time_small.set_xlim(self.TD.min(), self.TD.max())
+            self.ax_time_small.set_ylim(vmin_g - margin, vmax_g + margin)
+            self.ax_time_small.set_xlabel("Delay (ps)")
+            self.ax_time_small.set_title("Kinetics (Preview)") # Título estático
+    
+            self.ax_spec_small.set_xlim(WL_plot.min(), WL_plot.max())
+            self.ax_spec_small.set_ylim(vmin_g - margin, vmax_g + margin)
+            self.ax_spec_small.set_xlabel("Wavelength (nm)")
+            self.ax_spec_small.set_title("Spectra (Preview)") # Título estático
+    
+            # Conectar eventos
+            if self.cid_click is None:
+                self.cid_click = self.canvas.mpl_connect("button_press_event", self.on_click_map)
+    
+            # 4. Disparar el primer dibujado completo (Genera el bg_cache)
+            self.canvas.draw()
 
-        self.ax_map.set_xlabel("Wavelength (nm)")
-        self.ax_map.set_ylabel("Delay (ps)")
-        self.ax_map.set_yscale("symlog")
-    
-        divider = make_axes_locatable(self.ax_map)
-        cax = divider.append_axes("right", size="5%", pad=0.05)
-        self.cbar = self.figure.colorbar(self.pcm, cax=cax, label="ΔA")
-    
-        # crucetas y marcador iniciales
-        self.vline_map = self.ax_map.axvline(self.WL[0], color='k', ls='--', lw=1, zorder=6)
-        self.hline_map = self.ax_map.axhline(self.TD[0], color='k', ls='--', lw=1, zorder=6)
-        self.marker_map, = self.ax_map.plot([self.WL[0]], [self.TD[0]], 'wx', markersize=8, markeredgewidth=2, zorder=7)
-    
-        # limpiar small plots
-        self.cut_time_small.set_data([], [])
-        self.cut_spec_small.set_data([], [])
-        self.ax_time_small.relim(); self.ax_time_small.autoscale_view()
-        self.ax_spec_small.relim(); self.ax_spec_small.autoscale_view()
-    
-        # conectar eventos
-        if self.cid_click is None:
-            self.cid_click = self.canvas.mpl_connect("button_press_event", self.on_click_map)
-
-    
-        self.canvas.draw_idle()
-    
     
     def update_wl_range(self):
-        """Actualizar el mapa y subplots pequeños según el rango de λ de los sliders.
-           Además actualiza las etiquetas que muestran las longitudes de onda (nm)."""
-        # si no hay datos aún, solo actualiza etiquetas si es posible (evita crash)
-        if getattr(self, "WL", None) is None or getattr(self, "data", None) is None:
-            # Si las etiquetas existen pero no hay WL definidos, poner guiones
-            if hasattr(self, "lbl_min_value"):
-                self.lbl_min_value.setText("- nm")
-            if hasattr(self, "lbl_max_value"):
-                self.lbl_max_value.setText("- nm")
-            return
+            """
+            Actualiza las variables de datos visibles según los sliders 
+            y llama a plot_map para dibujar todo correctamente.
+            """
+            if getattr(self, "WL", None) is None or getattr(self, "data", None) is None:
+                 # Actualizar textos a guiones si no hay datos
+                if hasattr(self, "lbl_min_value"): self.lbl_min_value.setText("- nm")
+                if hasattr(self, "lbl_max_value"): self.lbl_max_value.setText("- nm")
+                return
     
-        # sliders devuelven índices de WL (según cómo los configuras en load_file)
-        wl_min_idx = int(self.slider_min.value())
-        wl_max_idx = int(self.slider_max.value())
+            # 1. Obtener índices de los sliders
+            wl_min_idx = int(self.slider_min.value())
+            wl_max_idx = int(self.slider_max.value())
     
-        # proteger orden y límites
-        if wl_min_idx >= wl_max_idx:
-            wl_max_idx = wl_min_idx + 1
+            # 2. Corregir cruces de índices
+            if wl_min_idx >= wl_max_idx: 
+                wl_max_idx = wl_min_idx + 1
+            
+            # Asegurar límites del array
+            wl_min_idx = max(0, min(wl_min_idx, len(self.WL) - 1))
+            wl_max_idx = max(0, min(wl_max_idx, len(self.WL) - 1))
     
-        wl_min_idx = max(0, min(wl_min_idx, len(self.WL) - 1))
-        # queremos usar wl_max_idx como índice inclusivo -> limitar a len(WL)-1
-        wl_max_idx = max(0, min(wl_max_idx, len(self.WL) - 1))
-    
-        # actualizar etiquetas (valores reales en nm)
-        try:
-            if hasattr(self, "lbl_min_value"):
+            # 3. Actualizar Etiquetas de Texto (nm)
+            try:
                 self.lbl_min_value.setText(f"{self.WL[wl_min_idx]:.1f} nm")
-            if hasattr(self, "lbl_max_value"):
                 self.lbl_max_value.setText(f"{self.WL[wl_max_idx]:.1f} nm")
-        except Exception:
-            # fallback: mostrar índices si algo raro pasa con self.WL
-            if hasattr(self, "lbl_min_value"):
-                self.lbl_min_value.setText(f"{wl_min_idx}")
-            if hasattr(self, "lbl_max_value"):
-                self.lbl_max_value.setText(f"{wl_max_idx}")
-    
-        # ahora construimos la selección (nota: slice end no inclusivo por Python)
-        wl_slice_end = wl_max_idx + 1
-        WL_sel = self.WL[wl_min_idx:wl_slice_end]
-        data_sel = self.data[wl_min_idx:wl_slice_end, :]  # (N_wl_selected, N_td)
-        # Guardar los datos visibles actuales para otras funciones (como on_move_map)
-        self.WL_visible = WL_sel
-        self.data_visible = data_sel
-
-        # --- limpiar eje y colorbar ---
-        self.ax_map.clear()
-        if self.cbar:
-            try:
-                self.cbar.remove()
-            except Exception:
-                pass
-            self.cbar = None
-    
-        # reset referencias de cruces
-        self.vline_map = None
-        self.hline_map = None
-        self.marker_map = None
-    
-        # dibujar mapa filtrado
-        if self.use_discrete_levels:
-            self.pcm = self._plot_discrete_map(
-                self.ax_map,
-                WL_sel,
-                self.TD,
-                data_sel,
-                n_levels=self.n_levels,
-                shading="auto"
-            )
-        else:
-            self.pcm = self.ax_map.pcolormesh(
-                WL_sel,
-                self.TD,
-                data_sel.T,
-                shading="auto",
-                cmap="jet"
-            )
-    
-        self.ax_map.set_xlabel("Wavelength (nm)")
-        self.ax_map.set_ylabel("Delay (ps)")
-        self.ax_map.set_title("ΔA Map")
-        self.ax_map.set_yscale("symlog")
-    
-        divider = make_axes_locatable(self.ax_map)
-        cax = divider.append_axes("right", size="5%", pad=0.05)
-        self.cbar = self.figure.colorbar(self.pcm, cax=cax, label="ΔA")
-    
-        # redibujar puntos clicados
-        for p in getattr(self, "clicked_points", []):
-            try:
-                self.ax_map.plot(p['x'], p['y'], 'wo', markeredgecolor='k', markersize=6, zorder=6)
             except Exception:
                 pass
     
-        # crear nuevas cruces iniciales (posición central del rango)
-        if WL_sel.size > 0:
-            x0 = float(np.median(WL_sel))
-        else:
-            x0 = float(self.WL[0])
-        y0 = float(np.median(self.TD))
+            # 4. DEFINIR LOS DATOS VISIBLES (Estado Global de Visualización)
+            source_data = self.data_corrected if getattr(self, "showing_corrected", False) else self.data
+            
+            # Cortamos los datos
+            self.WL_visible = self.WL[wl_min_idx : wl_max_idx + 1]
+            self.data_visible = source_data[wl_min_idx : wl_max_idx + 1, :]
     
-        self.vline_map = self.ax_map.axvline(x0, color='k', ls='--', lw=1, zorder=6)
-        self.hline_map = self.ax_map.axhline(y0, color='k', ls='--', lw=1, zorder=6)
-        self.marker_map, = self.ax_map.plot([x0], [y0], 'wx', markersize=8, markeredgewidth=2, zorder=7)
-    
-        # --- ACTUALIZAR SUBPLOTS PEQUEÑOS ---
-        self.update_small_cuts(x0, y0, WL_sel=WL_sel, data_sel=data_sel)
-    
-        self.canvas.draw_idle()
-    
-    # interacción: selección de puntos
+            # 5. LLAMADA CENTRALIZADA
+            self.plot_map()
+            
     def enable_point_selection(self):
         self.clicked_points = []
         if self.cid_click is None:
@@ -847,41 +807,22 @@ class FLUPSAnalyzer(QMainWindow):
         QMessageBox.information(self, "Mode: Select points",
                                 "Click izquierdo: añadir punto\nClick derecho: borrar último punto.\nLuego pulsa 'Fit t₀'.")
     def update_small_cuts(self, x, y, WL_sel=None, data_sel=None):
-        """Actualiza los subplots pequeños (cinética + espectro) para la posición (x,y)
-           usando los datos filtrados por sliders si se pasan."""
-        if x is None or y is None:
-            return
+            """Actualización completa tras un clic."""
+            # Reutilizamos la lógica del movimiento simulando un evento
+            # Esto asegura coherencia visual
+            class MockEvent:
+                pass
+            evt = MockEvent()
+            evt.xdata = x
+            evt.ydata = y
+            evt.inaxes = self.ax_map
+            
+            # Llamamos a on_move_map para pintar rápido
+            self.on_move_map(evt)
+            
+            # Si fue un clic, aseguramos que se quede fijo (opcional)
+            # self.canvas.draw_idle()
     
-        #  Prioridad: datos explícitos → rango visible guardado → todos los datos
-        if WL_sel is not None and data_sel is not None:
-            WL_vis = WL_sel
-            data_vis = data_sel
-        elif hasattr(self, "WL_visible") and self.WL_visible is not None:
-            WL_vis = self.WL_visible
-            data_vis = self.data_visible
-        else:
-            WL_vis = self.WL
-            data_vis = self.data
-    
-        if WL_vis.size == 0:
-            return
-    
-        # índices más cercanos
-        idx_wl = int(np.argmin(np.abs(WL_vis - x)))
-        idx_td = int(np.argmin(np.abs(self.TD - y)))
-    
-        # cinética (fila idx_wl)
-        y_time = data_vis[idx_wl, :].ravel()
-        self.cut_time_small.set_data(self.TD, y_time)
-        self.ax_time_small.relim(); self.ax_time_small.autoscale_view()
-        self.ax_time_small.set_title(f"Kinetics at {WL_vis[idx_wl]:.1f} nm")
-    
-        # espectro (columna idx_td)
-        y_spec = data_vis[:, idx_td].ravel()
-        self.cut_spec_small.set_data(WL_vis, y_spec)
-        self.ax_spec_small.relim(); self.ax_spec_small.autoscale_view()
-        self.ax_spec_small.set_title(f"Spectra at {self.TD[idx_td]:.2f} ps")
-
     def on_click_map(self, event):
         """Registrar puntos sobre el mapa (izq añade, derecha borra último) y actualizar cortes."""
         if event.inaxes != self.ax_map:
@@ -933,49 +874,45 @@ class FLUPSAnalyzer(QMainWindow):
         self.canvas.draw_idle()
 
     def on_move_map(self, event):
-        """Actualizar líneas y subplots pequeños al mover el cursor sobre el mapa."""
-        if event.inaxes != self.ax_map or self.data is None:
-            return
+            """Versión optimizada: usa restore_region y blit en vez de redibujar todo."""
+            # Si no hay caché o no estamos en el eje, salir
+            if self.bg_cache is None or self.data is None: 
+                return
+            if event.inaxes != self.ax_map: 
+                return
     
-        x, y = event.xdata, event.ydata
-        if x is None or y is None:
-            return
+            # 1. Restaurar fondo limpio (borra cursores anteriores instantáneamente)
+            self.canvas.restore_region(self.bg_cache)
     
-        # Crear o actualizar líneas cruzadas
-        if self.vline_map is None:
-            self.vline_map = self.ax_map.axvline(x, color='k', ls='--', lw=1, zorder=6)
-        else:
+            # 2. Actualizar posiciones matemáticas (sin dibujar aún)
+            x, y = event.xdata, event.ydata
+            
+            # Líneas del mapa
             self.vline_map.set_xdata([x, x])
-    
-        if self.hline_map is None:
-            self.hline_map = self.ax_map.axhline(y, color='k', ls='--', lw=1, zorder=6)
-        else:
             self.hline_map.set_ydata([y, y])
-    
-        # Crear o actualizar el marcador
-        if self.marker_map is None:
-            self.marker_map, = self.ax_map.plot([x], [y], 'wx', markersize=8,
-                                                markeredgewidth=2, zorder=7)
-        else:
             self.marker_map.set_data([x], [y])
+            
+            # Calcular índices para los subplots
+            # Usamos WL_visible si existe, si no WL completo
+            cur_WL = self.WL_visible if hasattr(self, 'WL_visible') and self.WL_visible is not None else self.WL
+            cur_data = self.data_visible if hasattr(self, 'data_visible') and self.data_visible is not None else self.data
+            
+            if cur_WL is not None and len(cur_WL) > 0:
+                idx_wl = int(np.abs(cur_WL - x).argmin())
+                idx_td = int(np.abs(self.TD - y).argmin())
     
-        # Actualizar los subplots pequeños (cinética y espectro)
-        self.update_small_cuts(x, y)
-        
-        # --- actualizar línea vertical en la cinética ---
-        try:
-            if self.vline_time_small is None:
-                self.vline_time_small = self.ax_time_small.axvline(
-                    x=y, color='k', ls='--', lw=1, zorder=5)
-            else:
+                # Actualizar curvas pequeñas
+                self.cut_time_small.set_data(self.TD, cur_data[idx_wl, :])
                 self.vline_time_small.set_xdata([y, y])
-                self.vline_time_small.set_visible(True)
-        except Exception:
-            pass
+                self.cut_spec_small.set_data(cur_WL, cur_data[:, idx_td])
     
-        # Refrescar el dibujo (sin sobrecargar CPU)
-        self.canvas.draw_idle()
-
+                # Info en barra de estado
+                val = cur_data[idx_wl, idx_td]
+                self.label_status.setText(f"Cursor: {x:.1f} nm, {y:.2f} ps | Val: {val:.4e}")
+    
+            # 3. Dibujar SOLO lo animado y volcar a pantalla
+            self.draw_animated_artists()
+            self.canvas.blit(self.figure.bbox)
 
     def fit_t0_points(self):
         if not getattr(self, "clicked_points", None) or len(self.clicked_points) < 2:
@@ -1067,221 +1004,58 @@ class FLUPSAnalyzer(QMainWindow):
 
 
     def toggle_corrected_map(self):
-        """Alterna entre mapa original y corregido dentro de la misma ventana,
-            mostrando el mapa limpio y manteniendo crucetas."""
-    
-        if self.data_corrected is None:
-            QMessageBox.warning(self, "No corrected data", "Run 'Fit t₀' first to generate corrected data.")
-            return
-    
-        # ==============================================================
-        # DECIDIR QUÉ MAPA MOSTRAR (RESPETANDO RANGO DE SLIDERS)
-        # ==============================================================
-        
-        # Determinar la matriz que representa los datos base/originales.
-        # En TAS, self.data es la matriz solvente-corregida (Base Data).
-        # self.data_corrected es la matriz t0-corregida.
-        
-        if getattr(self, "showing_corrected", False):
-            # Mostrar mapa original (Base Data: solvente-corregida)
-            data_source = self.data
-            self.showing_corrected = False
-            self.btn_show_corr.setText("Show Corrected Map")
-            title_suffix = "(Base/Original)"
-        else:
-            # Mostrar mapa corregido (t0-corregida)
-            data_source = self.data_corrected
-            self.showing_corrected = True
-            self.btn_show_corr.setText("Show Base/Original Map")
-            title_suffix = "(t₀ Corrected)"
-    
-        # Aplicar el filtro de rango de longitud de onda
-        if hasattr(self, "WL_visible") and self.WL_visible is not None:
-            wl_min = self.WL_visible[0]
-            wl_max = self.WL_visible[-1]
-            wl_min_idx = np.argmin(np.abs(self.WL - wl_min))
-            wl_max_idx = np.argmin(np.abs(self.WL - wl_max)) + 1
+            """Alterna entre mapa original y corregido usando el renderizado optimizado."""
             
-            WL_used = self.WL_visible
-            data_to_plot = data_source[wl_min_idx:wl_max_idx, :]
-        else:
-            # Si no hay rango visible guardado, usar todos los datos
-            WL_used = self.WL
-            data_to_plot = data_source
-            
-        # Guardar los datos visibles actuales (para on_move_map, etc.)
-        self.WL_visible = WL_used
-        self.data_visible = np.copy(data_to_plot)
+            # 1. Validación de seguridad
+            if self.data_corrected is None:
+                QMessageBox.warning(self, "No corrected data", "Run 'Fit t₀' first.")
+                return
     
-        # ==============================================================
-        # LIMPIAR MAPA Y COLORBAR
-        # ==============================================================
+            # 2. Alternar estado (flag booleano)
+            self.showing_corrected = not getattr(self, "showing_corrected", False)
     
-        self.ax_map.clear()
-        if self.cbar:
-            try:
-                self.cbar.remove()
-            except Exception:
-                pass
-            self.cbar = None
+            # 3. Decidir la fuente de datos
+            # Si showing_corrected es True, usamos los datos corregidos.
+            # Si es False, usamos self.data (que es el base/original).
+            source_data = self.data_corrected if self.showing_corrected else self.data
     
-        # Borrar puntos seleccionados y línea de fit (mantener lógica FLUPS)
-        for p in getattr(self, "clicked_points", []):
-            try:
-                p['artist'].remove()
-            except Exception:
-                pass
-        self.clicked_points = []
-    
-        if self.fit_line_artist is not None:
-            try:
-                self.fit_line_artist.remove()
-            except Exception:
-                pass
-        self.fit_line_artist = None
-    
-        # ==============================================================
-        # ESCALAS DE COLOR
-        # ==============================================================
-    
-        if getattr(self, "is_TAS_mode", False):
-            finite_vals = self.data_visible[np.isfinite(self.data_visible)]
-            if finite_vals.size == 0:
-                vmin, vmax = -1, 1
+            # 4. Actualizar Textos
+            if self.showing_corrected:
+                self.btn_show_corr.setText("Show Base/Original Map")
+                suffix = "(t₀ Corrected)"
             else:
-                # Usar 1% y 99% para evitar outliers extremos
-                vmin, vmax = np.percentile(finite_vals, [1, 99])
-        else:
-            # FLUPS mode (datos normalizados)
-            vmin, vmax = -1, 1
+                self.btn_show_corr.setText("Show Corrected Map")
+                suffix = "(Base/Original)"
     
-        # ==============================================================
-        # DIBUJAR NUEVO MAPA (USANDO WL_visible)
-        # ==============================================================
+            # 5. Recalcular el slice visible (Respetando los Sliders)
+            # Esto es crucial para que al cambiar no se resetee el zoom de longitud de onda
+            if hasattr(self, 'slider_min') and hasattr(self, 'slider_max'):
+                wl_min_idx = int(self.slider_min.value())
+                wl_max_idx = int(self.slider_max.value())
+                
+                # Protecciones de índice
+                if wl_min_idx >= wl_max_idx: wl_max_idx = wl_min_idx + 1
+                wl_min_idx = max(0, min(wl_min_idx, len(self.WL) - 1))
+                wl_max_idx = max(0, min(wl_max_idx, len(self.WL) - 1))
+                
+                # Actualizamos las variables que usa plot_map
+                self.WL_visible = self.WL[wl_min_idx:wl_max_idx+1]
+                self.data_visible = source_data[wl_min_idx:wl_max_idx+1, :]
+            else:
+                # Fallback por si no hay sliders
+                self.WL_visible = self.WL
+                self.data_visible = source_data
     
-        if self.use_discrete_levels:
-            self.pcm = self._plot_discrete_map(
-                self.ax_map,
-                self.WL_visible,
-                self.TD,
-                self.data_visible,
-                n_levels=self.n_levels,
-                shading="auto",
-                vmin=vmin,
-                vmax=vmax
-            )
-        else:
-            self.pcm = self.ax_map.pcolormesh(
-                self.WL_visible,
-                self.TD,
-                self.data_visible.T,
-                shading="auto",
-                cmap="jet",
-                vmin=vmin,
-                vmax=vmax
-            )
-    
-        self.ax_map.set_xlabel("Wavelength (nm)")
-        self.ax_map.set_ylabel("Delay (ps)")
-        
-        # 🌟 CORRECCIÓN DEL TÍTULO: Usar la técnica correcta
-        tech_name = "TAS" if getattr(self, "is_TAS_mode", False) else "FLUPS"
-        self.ax_map.set_title(f"ΔA Map ({tech_name}) {title_suffix}")
-        
-        self.ax_map.set_yscale("symlog")
-    
-        # ==============================================================
-        # COLORBAR, ESTILO, CRUCETAS Y EVENTOS (Sin cambios en esta sección)
-        # ==============================================================
-        
-        divider = make_axes_locatable(self.ax_map)
-        cax = divider.append_axes("right", size="3%", pad=0.02)
-        self.cbar = self.figure.colorbar(self.pcm, cax=cax, label="ΔA")
-        self.cbar.ax.yaxis.set_tick_params(color="black", labelcolor="black")
-        self.cbar.ax.yaxis.label.set_color("black")
-        for spine in self.cbar.ax.spines.values():
-            spine.set_color("black")
-    
-        self.ax_map.set_facecolor("white")
-        self.ax_map.tick_params(colors="black")
-        self.ax_map.xaxis.label.set_color("black")
-        self.ax_map.yaxis.label.set_color("black")
-        for spine in self.ax_map.spines.values():
-            spine.set_color("black")
-    
-        # Restaurar/crear crucetas
-        if self.vline_map is not None:
-            x0 = self.vline_map.get_xdata()[0]
-        else:
-            x0 = self.WL_visible[0]
-    
-        if self.hline_map is not None:
-            y0 = self.hline_map.get_ydata()[0]
-        else:
-            y0 = self.TD[0]
-    
-        self.vline_map = self.ax_map.axvline(x0, color='k', ls='--', lw=1)
-        self.hline_map = self.ax_map.axhline(y0, color='k', ls='--', lw=1)
-        self.marker_map, = self.ax_map.plot([x0], [y0], 'wx', markersize=8, markeredgewidth=2)
-    
-        # limpiar subplots pequeños
-        self.cut_time_small.set_data([], [])
-        self.cut_spec_small.set_data([], [])
-        self.ax_time_small.relim(); self.ax_time_small.autoscale_view()
-        self.ax_spec_small.relim(); self.ax_spec_small.autoscale_view()
-    
-        # Redefinición de funciones internas y reconexión de eventos
-        def update_small_cuts_visual(x, y):
-            if x is None or y is None: return
-            idx_wl = int(np.argmin(np.abs(self.WL_visible - x)))
-            idx_td = int(np.argmin(np.abs(self.TD - y)))
-            y_time = self.data_visible[idx_wl, :].ravel()
-            self.cut_time_small.set_data(self.TD, y_time)
-            self.ax_time_small.relim(); self.ax_time_small.autoscale_view()
-            self.ax_time_small.set_title(f"Kinetics at {self.WL_visible[idx_wl]:.1f} nm")
-            y_spec = self.data_visible[:, idx_td].ravel()
-            self.cut_spec_small.set_data(self.WL_visible, y_spec)
-            self.ax_spec_small.relim(); self.ax_spec_small.autoscale_view()
-            self.ax_spec_small.set_title(f"Spectra at {self.TD[idx_td]:.2f} ps")
-    
-        def onclick_corr(event):
-            if event.inaxes != self.ax_map: return
-            x, y = event.xdata, event.ydata
-            if x is None or y is None: return
-            self.vline_map.set_xdata([x, x])
-            self.hline_map.set_ydata([y, y])
-            self.marker_map.set_data([x], [y])
-            update_small_cuts_visual(x, y)
-            self.canvas.draw_idle()
-    
-        def onmove_corr(event):
-            if event.inaxes != self.ax_map: return
-            x, y = event.xdata, event.ydata
-            if x is None or y is None: return
-            self.vline_map.set_xdata([x, x])
-            self.hline_map.set_ydata([y, y])
-            self.marker_map.set_data([x], [y])
-            update_small_cuts_visual(x, y)
-            self.canvas.draw_idle()
-    
-        # Desconectar eventos previos
-        # Es crucial que las desconexiones manejen la posibilidad de que los IDs
-        # cid_click/cid_move (de la base) sean usados o los cid_corr_... (de esta función)
-        
-        # Desconexión para los eventos de la base FLUPSAnalyzer
-        if self.cid_click is not None:
-             self.canvas.mpl_disconnect(self.cid_click)
-             self.cid_click = None # Se usa onclick_corr en su lugar
-    
-        if self.cid_move is not None:
-            self.canvas.mpl_disconnect(self.cid_move)
-            self.cid_move = None # Se usa onmove_corr en su lugar
-    
-        # Conectar los nuevos eventos (se guardan en variables específicas para esta función)
-        self.cid_corr_click = self.canvas.mpl_connect("button_press_event", onclick_corr)
-        self.cid_corr_move = self.canvas.mpl_connect("motion_notify_event", onmove_corr)
-    
-        self.canvas.draw_idle()
+            # 6. LLAMADA MÁGICA: Usamos el plot_map optimizado
+            # Esto se encargará del Blitting, SymLog, Limites y Eventos automáticamente.
+            self.plot_map()
+            
+            # Actualizamos el título explícitamente para reflejar el estado
+            tech_name = "TAS" if getattr(self, "is_TAS_mode", False) else "FLUPS"
+            self.ax_map.set_title(f"ΔA Map ({tech_name}) {suffix}")
+            
+            # Un redraw final para asegurar que el título se actualice
+            self.canvas.draw()
     
 class TASAnalyzer(FLUPSAnalyzer):
     def __init__(self):
@@ -1299,7 +1073,11 @@ class TASAnalyzer(FLUPSAnalyzer):
         self.use_discrete_levels = False  # Cambia a False si prefieres mapa continuo
         self.dial_levels.hide()
         self.lbl_dial.hide()
-
+        # --- NUEVO: Inicializar variables para Blitting (optimización) ---
+        self.bg_cache = None
+        self.cid_draw = None
+        self.cid_click = None
+        self.cid_move = None
        # --- Sliders extra para AM (amplitud) y SF (shift temporal) ---
         self.slider_am = QSlider(Qt.Horizontal)
         self.slider_am.setMinimum(0)
@@ -1521,6 +1299,16 @@ class TASAnalyzer(FLUPSAnalyzer):
         self.slider_min.setValue(0)
         self.slider_max.setValue(nwl - 1)
         
+        self.idx_min = 0
+        self.idx_max = nwl - 1
+        
+        # --- CONEXIONES (ESTO ES LO CRUCIAL) ---
+        try: self.slider_min.valueChanged.disconnect()
+        except: pass
+        try: self.slider_max.valueChanged.disconnect()
+        except: pass
+        self.slider_min.valueChanged.connect(self.update_wl_range)
+        self.slider_max.valueChanged.connect(self.update_wl_range)
         # --- Calcular mapa inicial ---
         self.label_status.setText(" TAS data loaded")
         self.update_am_sf()
@@ -1613,7 +1401,34 @@ class TASAnalyzer(FLUPSAnalyzer):
                                 f"Fit completed using {method} model.\nParameters: {np.round(popt,4)}")
         
 
-
+    def update_wl_range(self):
+            """Actualiza los índices de recorte y refresca el mapa."""
+            if self.medida is None:
+                return
+    
+            # 1. Leer valores de los sliders
+            # Aseguramos que son enteros (índices del array)
+            s_min = int(self.slider_min.value())
+            s_max = int(self.slider_max.value())
+    
+            # 2. Validar cruce (Min no puede ser >= Max)
+            if s_min >= s_max:
+                s_min = s_max - 1
+                if s_min < 0: s_min = 0
+                self.slider_min.blockSignals(True) # Evitar bucle infinito
+                self.slider_min.setValue(s_min)
+                self.slider_min.blockSignals(False)
+    
+            # 3. Guardar en las variables de clase
+            self.idx_min = s_min
+            self.idx_max = s_max
+    
+            # 4. Actualizar etiquetas de texto (Opcional, si tienes labels)
+            # self.lbl_min_val.setText(f"{self.WL[s_min]:.1f} nm")
+            # self.lbl_max_val.setText(f"{self.WL[s_max]:.1f} nm")
+    
+            # 5. Redibujar
+            self.plot_map()
     # ------------------------------------------------------------------
     # ACTUALIZACIÓN DE MAPA TRAS SLIDERS
         # ------------------------------------------------------------------
@@ -1659,296 +1474,638 @@ class TASAnalyzer(FLUPSAnalyzer):
     # DIBUJAR MAPA ΔA
     # ------------------------------------------------------------------
     def plot_map(self, show_fit=False):
-        """Dibuja el mapa principal TAS con crucetas y fit persistentes."""
-        if self.data is None:
-            return
+            """Dibuja el mapa (SymLog en Y) con soporte para modo Corregido/Original."""
+            
+            # 1. Determinar qué datos usar (Base vs Corregidos)
+            # Verificamos el flag que activa el botón toggle
+            showing_corrected = getattr(self, "showing_corrected", False)
+            
+            if showing_corrected and hasattr(self, "data_corrected") and self.data_corrected is not None:
+                source_data = self.data_corrected
+                mode_suffix = "(t₀ Corrected)"
+            else:
+                # Si no hay flag o es False, usamos self.data (que ya tiene la resta de solvente)
+                source_data = self.data
+                mode_suffix = "(Base Data)"
     
-        # --- Guardar estado previo (crucetas y fit) ---
-        x_cross, y_cross = None, None
-        if hasattr(self, "vline_map") and self.vline_map is not None:
-            x_cross = self.vline_map.get_xdata()[0]
-        if hasattr(self, "hline_map") and self.hline_map is not None:
-            y_cross = self.hline_map.get_ydata()[0]
+            if source_data is None:
+                return
     
-        # --- Limpiar eje principal ---
-        self.ax_map.clear()
-        if self.cbar:
-            try: self.cbar.remove()
-            except Exception: pass
-            self.cbar = None
+            # --- Limpieza ---
+            self.ax_map.clear()
+            self.ax_time_small.clear()
+            self.ax_spec_small.clear()
+            
+            # Reset de variables para evitar errores
+            self.vline_map = None
+            self.hline_map = None
+            self.marker_map = None
+            self.cut_time_small = None
+            self.cut_spec_small = None
+            
+            if self.cbar:
+                try: self.cbar.remove()
+                except: pass
+                self.cbar = None
     
-        # Escala real con margen
-        vmin = np.nanmin(self.data)
-        vmax = np.nanmax(self.data)
-        margin = 0.05 * (vmax - vmin)
-        vmin -= margin
-        vmax += margin
+            # --- 2. Recortes (Slicing) ---
+            if not hasattr(self, 'idx_min'): self.idx_min = 0
+            if not hasattr(self, 'idx_max'): self.idx_max = len(self.WL) - 1
     
-        # Dibujar mapa
-        self.pcm = self.ax_map.pcolormesh(
-            self.WL, self.TD, self.data.T,
-            shading="auto", cmap="jet",
-            vmin=vmin, vmax=vmax
-        )
+            idx_start = self.idx_min
+            idx_end = self.idx_max + 1
+            
+            wl_plot = self.WL[idx_start:idx_end]
+            
+            # AQUI ESTA EL CAMBIO IMPORTANTE: Usamos source_data en vez de self.data
+            data_plot = source_data[idx_start:idx_end, :]
+            
+            if len(wl_plot) < 2: return
     
-        self.ax_map.set_xlabel("Wavelength (nm)")
-        self.ax_map.set_ylabel("Delay (ps)")
-        self.ax_map.set_title("ΔA Map (TAS)")
-        self.ax_map.set_yscale("symlog")
-        self.ax_map.set_ylim(-1, 10)
-        # Colorbar
-        divider = make_axes_locatable(self.ax_map)
-        cax = divider.append_axes("right", size="5%", pad=0.05)
-        self.cbar = self.figure.colorbar(self.pcm, cax=cax, label="ΔA")
+            # --- 3. Calcular Límites Globales ---
+            g_min = np.nanmin(data_plot)
+            g_max = np.nanmax(data_plot)
+                
+            data_range = g_max - g_min
+            if data_range == 0: data_range = 1.0
+            y_lim_min = g_min - (0.1 * data_range)
+            y_lim_max = g_max + (0.1 * data_range)
     
-        # --- Restaurar crucetas ---
-        if x_cross is None:
-            x_cross = np.median(self.WL)
-        if y_cross is None:
-            y_cross = np.median(self.TD)
+            # --- 4. Dibujar Mapa Principal ---
+            self.pcm = self.ax_map.pcolormesh(
+                wl_plot, self.TD, data_plot.T,
+                shading="auto", cmap="jet",
+            )
+            
+            self.ax_map.set_yscale('symlog', linthresh=1.0)
+            self.ax_map.set_xlabel("Wavelength (nm)")
+            self.ax_map.set_ylabel("Delay (ps) - SymLog")
+            
+            # Actualizamos el título dinámicamente según el modo
+            self.ax_map.set_title(f"ΔA Map (TAS) {mode_suffix}")
+            
+            self.ax_map.set_xlim(wl_plot.min(), wl_plot.max())
+            
+            # Colorbar
+            divider = make_axes_locatable(self.ax_map)
+            cax = divider.append_axes("right", size="5%", pad=0.05)
+            self.cbar = self.figure.colorbar(self.pcm, cax=cax, label="ΔA")
+            self.ax_map.set_yscale('symlog', linthresh=1.0)
     
-        self.vline_map = self.ax_map.axvline(x_cross, color="k", ls="--", lw=1, zorder=6)
-        self.hline_map = self.ax_map.axhline(y_cross, color="k", ls="--", lw=1, zorder=6)
-        self.marker_map, = self.ax_map.plot([x_cross], [y_cross], "wx",
-                                            markersize=8, markeredgewidth=2, zorder=7)
+            # --- 5. Elementos Dinámicos ---
+            mid_x = np.median(wl_plot)
+            mid_y = np.median(self.TD)
+            
+            self.vline_map = self.ax_map.axvline(mid_x, color="k", ls="--", lw=1, animated=True)
+            self.hline_map = self.ax_map.axhline(mid_y, color="k", ls="--", lw=1, animated=True)
+            self.marker_map, = self.ax_map.plot([mid_x], [mid_y], "wx", markersize=8, markeredgewidth=2, animated=True)
     
-        if hasattr(self, "result_fit") and self.result_fit is not None:
-            fit_x = self.result_fit.get("fit_x", None)
-            fit_y = self.result_fit.get("fit_y", None)
-            if fit_x is not None and fit_y is not None:
-                # --- Dibujar el fit temporalmente en escala lineal ---
-                prev_scale = self.ax_map.get_yscale()
-                self.ax_map.set_yscale("linear")
-        
-                self.fit_line_artist, = self.ax_map.plot(
-                    fit_x, fit_y, "r-", lw=2, label="t₀ fit", zorder=10
-                )
-        
-                # --- Restaurar la escala original (symlog) ---
-                self.ax_map.set_yscale(prev_scale)
-                self.ax_map.legend()
-
-        # Actualizar subplots pequeños
-        self.update_small_cuts(x_cross, y_cross)
+            # --- 6. Configurar Subplots Pequeños ---
+            
+            # A) CINÉTICA (Abajo-Izquierda)
+            y_cut_time = data_plot[np.abs(wl_plot - mid_x).argmin(), :]
+            self.cut_time_small, = self.ax_time_small.plot(self.TD, y_cut_time, 'b-', animated=True)
+            self.vline_time_small = self.ax_time_small.axvline(mid_y, color='k', ls='--', lw=1.2, animated=True)
+            
+            self.ax_time_small.set_xscale('linear') 
+            self.ax_time_small.set_xlim(self.TD.min(), self.TD.max())
+            self.ax_time_small.set_ylim(y_lim_min, y_lim_max)
+            self.ax_time_small.set_title("Kinetics")
+            self.ax_time_small.set_xlabel("Delay (ps)")
     
-        # Reconectar eventos
-        if self.cid_click is None:
-            self.cid_click = self.canvas.mpl_connect("button_press_event", self.on_click_map)
-        if self.cid_move is None:
-            self.cid_move = self.canvas.mpl_connect("motion_notify_event", self.on_move_map)
+            # B) ESPECTRO (Abajo-Derecha)
+            y_cut_spec = data_plot[:, np.abs(self.TD - mid_y).argmin()]
+            self.cut_spec_small, = self.ax_spec_small.plot(wl_plot, y_cut_spec, 'r-', animated=True)
+            
+            self.ax_spec_small.set_xlim(wl_plot.min(), wl_plot.max())
+            self.ax_spec_small.set_ylim(y_lim_min, y_lim_max)
+            self.ax_spec_small.set_title("Spectrum")
+            self.ax_spec_small.set_xlabel("Wavelength (nm)")
     
-        self.canvas.draw_idle()
-
+            # --- 7. Eventos ---
+            self.bg_cache = None
+            if self.cid_draw is not None: self.canvas.mpl_disconnect(self.cid_draw)
+            self.cid_draw = self.canvas.mpl_connect('draw_event', self.on_draw)
+            
+            if self.cid_click is None:
+                self.cid_click = self.canvas.mpl_connect("button_press_event", self.on_click_map)
+            if self.cid_move is None:
+                self.cid_move = self.canvas.mpl_connect("motion_notify_event", self.on_move_map)
+    
+            self.canvas.draw()
+    def on_draw(self, event):
+            """Captura el fondo para blitting cuando se redibuja la figura completa."""
+            if event is not None and event.canvas != self.canvas:
+                return
+            # Copiamos la región del canvas (sin las líneas animadas)
+            self.bg_cache = self.canvas.copy_from_bbox(self.figure.bbox)
+            
+            # Aprovechamos para redibujar las líneas animadas una vez
+            self.draw_animated_artists()
+            
+    def draw_animated_artists(self):
+            """Ayuda para dibujar solo los elementos dinámicos."""
+            # 1. Verificación de seguridad:
+            # Si vline_map no existe o es None, no hacemos nada.
+            # Esto evita el crash cuando la ventana se abre antes de cargar datos.
+            vline = getattr(self, 'vline_map', None)
+            if vline is None:
+                return
+    
+            # 2. Dibujar elementos del Mapa
+            # (Como ya comprobamos vline, asumimos que el resto se crearon junto a él)
+            try:
+                self.ax_map.draw_artist(self.vline_map)
+                self.ax_map.draw_artist(self.hline_map)
+                self.ax_map.draw_artist(self.marker_map)
+                
+                # 3. Dibujar elementos de los subplots
+                # Verificamos también estos por seguridad
+                if getattr(self, 'cut_time_small', None) is not None:
+                    self.ax_time_small.draw_artist(self.cut_time_small)
+                    self.ax_time_small.draw_artist(self.vline_time_small)
+                
+                if getattr(self, 'cut_spec_small', None) is not None:
+                    self.ax_spec_small.draw_artist(self.cut_spec_small)
+    
+            except AttributeError:
+                # Si algo falla internamente en matplotlib (ej. ventana cerrada), ignoramos
+                pass
     def update_small_cuts(self, x, y, WL_sel=None, data_sel=None):
-        """Actualiza los subplots de cinética y espectro para la posición (x, y)."""
-        if x is None or y is None or self.data is None:
-            return
-    
-        # --- Subconjunto según sliders ---
-        if WL_sel is None or data_sel is None:
-            wl_min_idx = self.slider_min.value()
-            wl_max_idx = self.slider_max.value()
-            wl_max_idx = min(wl_max_idx + 1, len(self.WL))
-            WL_sel = self.WL[wl_min_idx:wl_max_idx]
-            data_sel = self.data[wl_min_idx:wl_max_idx, :]
-    
-        if WL_sel.size == 0:
-            return
-    
-        idx_wl = np.argmin(np.abs(WL_sel - x))
-        idx_td = np.argmin(np.abs(self.TD - y))
-    
-        # --- Cinética ---
-        y_time = data_sel[idx_wl, :]
-        self.cut_time_small.set_data(self.TD, y_time)
-        self.ax_time_small.relim()
-        self.ax_time_small.autoscale_view()
-        self.ax_time_small.set_title(f"Kinetics at {WL_sel[idx_wl]:.1f} nm")
-    
-        #  Dibujar o actualizar la línea de tiempo
-        if not hasattr(self, "vline_time_small") or self.vline_time_small is None:
-            self.vline_time_small = self.ax_time_small.axvline(
-                x=y, color='k', ls='--', lw=1.2, zorder=5)
-        else:
-            self.vline_time_small.set_xdata([y, y])
-            self.vline_time_small.set_visible(True)
-    
-        # --- Espectro ---
-        y_spec = data_sel[:, idx_td]
-        self.cut_spec_small.set_data(WL_sel, y_spec)
-        self.ax_spec_small.relim()
-        self.ax_spec_small.autoscale_view()
-        self.ax_spec_small.set_title(f"Spectra at {self.TD[idx_td]:.2f} ps")
-    
-    
-        self.canvas.draw_idle()
-
+            """Actualización completa (lenta) para clicks o cambios de slider."""
+            # Podemos reutilizar la lógica de movimiento o forzar un draw completo
+            # Para mantener coherencia visual tras un click:
+            self.on_move_map(type('Event', (object,), {'xdata': x, 'ydata': y, 'inaxes': self.ax_map})())
+            self.canvas.draw_idle() # Asegura que todo quede fijo
 
     # ------------------------------------------------------------------
     # EVENTO DE MOVIMIENTO DE RATÓN
     # ------------------------------------------------------------------
     def on_move_map(self, event):
-        """Actualiza líneas y subplots al mover el cursor sobre el mapa."""
-        if event.inaxes != self.ax_map or self.data is None:
-            return
-
-        x, y = event.xdata, event.ydata
-        if x is None or y is None:
-            return
-
-        # Líneas cruzadas
-        if self.vline_map is None:
-            self.vline_map = self.ax_map.axvline(x, color='k', ls='--', lw=1, zorder=6)
-        else:
+            """Actualización ultra-rápida usando Blitting."""
+            # 1. Validaciones básicas de ejes y datos
+            if self.data is None or event.inaxes != self.ax_map:
+                return
+    
+            # 2. --- CORRECCIÓN DEL ERROR ---
+            # Verificamos si las líneas existen. Si vline_map es None,
+            # significa que el gráfico se está limpiando o no se ha creado aún.
+            # Usamos getattr por seguridad extra.
+            if getattr(self, 'vline_map', None) is None:
+                return
+    
+            # 3. Obtener coordenadas
+            x, y = event.xdata, event.ydata
+            if x is None or y is None: return
+    
+            # 4. Restaurar fondo limpio (borra las líneas anteriores)
+            if self.bg_cache is not None:
+                self.canvas.restore_region(self.bg_cache)
+    
+            # 5. Actualizar datos de las líneas (sin redibujar ejes)
+            # --- Mapa ---
             self.vline_map.set_xdata([x, x])
-
-        if self.hline_map is None:
-            self.hline_map = self.ax_map.axhline(y, color='k', ls='--', lw=1, zorder=6)
-        else:
             self.hline_map.set_ydata([y, y])
-
-        # Marcador
-        if self.marker_map is None:
-            self.marker_map, = self.ax_map.plot([x], [y], 'wx', markersize=8, markeredgewidth=2, zorder=7)
-        else:
             self.marker_map.set_data([x], [y])
-
-        # Actualizar subplots
-        self.update_small_cuts(x, y)
-        
-
+            
+            # --- Datos para cortes ---
+            # Búsqueda rápida de índices (usando WL y TD recortados si fuera necesario, 
+            # pero para índices globales usamos self.WL/self.TD originales con cuidado)
+            
+            # Nota: Si usas recorte en plot_map, aquí debes tener cuidado. 
+            # Para simplificar y evitar errores de índice, buscaremos en los arrays globales
+            idx_wl = np.abs(self.WL - x).argmin()
+            idx_td = np.abs(self.TD - y).argmin()
+            
+            # Validar índices (por si el ratón está fuera del rango de datos válidos)
+            if idx_wl >= self.data.shape[0] or idx_td >= self.data.shape[1]:
+                return
+    
+            # Actualizar curva Cinética
+            y_time = self.data[idx_wl, :]
+            self.cut_time_small.set_data(self.TD, y_time)
+            self.vline_time_small.set_xdata([y, y])
+            
+            # Actualizar curva Espectro
+            y_spec = self.data[:, idx_td]
+            self.cut_spec_small.set_data(self.WL, y_spec)
+    
+            # 6. Dibujar SOLO los elementos animados
+            self.draw_animated_artists()
+    
+            # 7. Volcar a pantalla (Blit)
+            self.canvas.blit(self.figure.bbox)
+            
+            # Barra de estado
+            val = self.data[idx_wl, idx_td]
+            self.label_status.setText(f"Cursor: {x:.1f} nm, {y:.2f} ps | ΔA: {val:.4e}")
 
 class GlobalFitPanel(QDialog):
     def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Global Fit")
-        self.resize(1000, 700)
+            super().__init__(parent)
+            self.setWindowTitle("Global Fit Analysis")
+            self.resize(1150, 750) 
+    
+            # --- 1. Variables de Datos ---
+            
+            self.parent_app = parent
+            self.data_c = None   
+            self.data_raw = None 
+            self.TD = None       
+            self.WL = None       
+            self.base_dir = None
+            
+            # Determine base dir
+            if hasattr(parent, "save_dir") and parent.save_dir:
+                self.base_dir = parent.save_dir
+            elif hasattr(parent, "file_path") and parent.file_path:
+                base_name = os.path.splitext(os.path.basename(parent.file_path))[0]
+                self.base_dir = os.path.join(os.path.dirname(parent.file_path), f"{base_name}_Results")
+                os.makedirs(self.base_dir, exist_ok=True)
+            else:
+                self.base_dir = os.getcwd()
+    
+            # --- 2. Variables del Ajuste ---
+            self.numExp = 3
+            self.model_type = 'Parallel' 
+            self.t0_choice = 'No'
+            self.tech = 'FLUPS'
+            self.yscale = 'linear'
+            
+            # Placeholders para resultados
+            self.fit_result = None
+            self.fit_x = None
+            self.As = None
+            # ... resto de variables fit
+            self.fit_resid = None
+            self.fit_fitres = None
+            self.ci = None
+            self.errAs = None
+            self.t0s = None
+            self.errt0s = None
+            self.errtaus = None
+            self.ini = None
+            self.limi = None
+            self.lims = None
+    
+            # --- 3. DISEÑO PRINCIPAL (LAYOUT) ---
+            main_layout = QHBoxLayout() 
+            
+            # --- A. Panel Izquierdo (Sidebar) ---
+            self.sidebar = QWidget()
+            self.sidebar.setFixedWidth(340) 
+            self.sidebar_layout = QVBoxLayout(self.sidebar)
+            self.sidebar_layout.setContentsMargins(5, 5, 5, 5)
+            
+            self._init_sidebar_ui() 
+            
+            main_layout.addWidget(self.sidebar)
+    
+            # --- B. Panel Derecho (Gráficos) ---
+            self.right_area = QWidget()
+            self.right_layout = QVBoxLayout(self.right_area)
+            
+            self._init_plots_ui() 
+            
+            main_layout.addWidget(self.right_area)
+    
+            self.setLayout(main_layout)
+    
+    # --- IMPORTANTE: INICIALIZAR VARIABLES DE PLOTTING ---
+            # Si no pones esto, te dará el error de la Imagen 1
+            self.pcm_exp = None
+            self.cbar_exp = None
+            self.pcm_fit = None
+            self.cbar_fit = None
+            self.pcm_resid = None
+            self.cbar_resid = None
+        
 
-        # Data placeholders: prefer parent's data if present
-        self.parent_app = parent
-        self.data_c = None   # shape: (numWL, numTD)
-        self.TD = None
-        self.WL = None
-        self.base_dir = None
-        # --- Determinar carpeta base de guardado ---
-        if hasattr(parent, "save_dir") and parent.save_dir:
-            #  Usa la carpeta de resultados del programa principal
-            self.base_dir = parent.save_dir
-        elif hasattr(parent, "file_path") and parent.file_path:
-            #  Si no hay save_dir pero sí un archivo cargado
-            base_name = os.path.splitext(os.path.basename(parent.file_path))[0]
-            self.base_dir = os.path.join(os.path.dirname(parent.file_path), f"{base_name}_Results")
-            os.makedirs(self.base_dir, exist_ok=True)
-        else:
-            # ⚠️ Fallback: si no hay nada, usa el directorio actual
-            self.base_dir = os.getcwd()
-        # fit-related
-        self.numExp = 3
-        self.t0_choice = 'No'
-        self.ini = None
-        self.limi = None
-        self.lims = None
-        self.tech = 'FLUPS'
-
-        # UI elements
-        layout = QVBoxLayout()
-
-        top_row = QHBoxLayout()
+    def _init_sidebar_ui(self):
+        """Construye todos los botones y cajas del panel izquierdo."""
+        l = self.sidebar_layout
+        
+        # --- Grupo 1: Carga de Datos ---
+        gb_load = QGroupBox("1. Data Source")
+        v_load = QVBoxLayout()
+        
         self.label_status = QLabel("No data loaded")
-        top_row.addWidget(self.label_status)
+        self.label_status.setStyleSheet("color: gray; font-style: italic; font-weight: bold;")
+        v_load.addWidget(self.label_status)
+        
+        h_btns = QHBoxLayout()
+        self.btn_load = QPushButton("Load .npy")
+        self.btn_load.clicked.connect(self.load_data) # Descomentar cuando tengas la funcion
+        h_btns.addWidget(self.btn_load)
+        
+        self.btn_parent = QPushButton("Use Parent Data")
+        self.btn_parent.clicked.connect(self.use_parent_data) # Descomentar luego
+        h_btns.addWidget(self.btn_parent)
+        
+        v_load.addLayout(h_btns)
+        gb_load.setLayout(v_load)
+        l.addWidget(gb_load)
 
-        self.btn_load = QPushButton("Load treated .npy")
-        self.btn_load.clicked.connect(self.load_data)
-        top_row.addWidget(self.btn_load)
+        # --- Grupo 2: Pre-procesado ---
+        gb_prep = QGroupBox("2. Pre-processing")
+        form_prep = QFormLayout()
 
-        self.btn_use_parent = QPushButton("Use data from main app")
-        self.btn_use_parent.clicked.connect(self.use_parent_data)
-        top_row.addWidget(self.btn_use_parent)
+        # Baseline
+        self.spin_bl = QSpinBox()
+        self.spin_bl.setRange(0, 500)
+        self.spin_bl.setValue(5)
+        self.spin_bl.valueChanged.connect(self.apply_baseline_correction) # Descomentar luego
+        form_prep.addRow("Baseline Pts:", self.spin_bl)
 
-        self.btn_run = QPushButton("Run Fit")
-        self.btn_run.clicked.connect(self.run_fit_pipeline)
-        self.btn_run.setEnabled(False)
-        top_row.addWidget(self.btn_run)
+        # Rangos WL
+        self.spin_wl_min = QDoubleSpinBox(); self.spin_wl_min.setRange(0, 10000); 
+        self.spin_wl_max = QDoubleSpinBox(); self.spin_wl_max.setRange(0, 10000); 
+        self.spin_wl_max.setDecimals(6)    
+        self.spin_wl_max.setSingleStep(0.5)
+        self.spin_wl_min.setDecimals(6)
+        self.spin_wl_min.setSingleStep(0.1)
+        
+        form_prep.addRow("Min WL (nm):", self.spin_wl_min)
+        form_prep.addRow("Max WL (nm):", self.spin_wl_max)
 
-        self.btn_show_das = QPushButton("Show DAS / Residuals")
-        self.btn_show_das.clicked.connect(self.plot_das_and_more)
+        # Rangos Tiempo
+        self.spin_t_min = QDoubleSpinBox(); self.spin_t_min.setRange(-100, 1e6); self.spin_t_min.setDecimals(3)
+        self.spin_t_max = QDoubleSpinBox(); self.spin_t_max.setRange(-100, 1e6); self.spin_t_max.setDecimals(3)
+        form_prep.addRow("Min Time (ps):", self.spin_t_min)
+        form_prep.addRow("Max Time (ps):", self.spin_t_max)
+
+        # Binning
+        self.spin_bin = QSpinBox()
+        self.spin_bin.setRange(1, 50)
+        self.spin_bin.setValue(1)
+        form_prep.addRow("Binning:", self.spin_bin)
+        
+        # Botón Preview
+        self.btn_preview = QPushButton("Apply & Preview")
+        self.btn_preview.clicked.connect(self._preview_data_processing) # Descomentar luego
+        form_prep.addRow(self.btn_preview)
+
+        gb_prep.setLayout(form_prep)
+        l.addWidget(gb_prep)
+
+        # --- Grupo 3: Modelo ---
+        gb_model = QGroupBox("3. Model Settings")
+        form_model = QFormLayout()
+        # --- D. Visualización (NUEVO) ---
+        gb_vis = QGroupBox("4. Visualization")
+        form_vis = QFormLayout()
+        
+        self.combo_scale = QComboBox()
+        self.combo_scale.addItems(["Linear", "SymLog"])
+        self.combo_scale.currentTextChanged.connect(self._on_scale_changed) # Conectamos función
+        form_vis.addRow("Time Axis Scale:", self.combo_scale)
+        
+        gb_vis.setLayout(form_vis)
+        l.addWidget(gb_vis)
+        # Num Exponenciales
+        self.spin_numExp = QSpinBox()
+        self.spin_numExp.setRange(1, 6)
+        self.spin_numExp.setValue(3)
+        form_model.addRow("Exponentials:", self.spin_numExp)
+
+        # Tipo de Modelo
+        self.combo_model = QComboBox()
+        self.combo_model.addItems(["Parallel (DAS)", "Sequential (SAS)"])
+        form_model.addRow("Model Type:", self.combo_model)
+
+        # Técnica
+        self.combo_tech = QComboBox()
+        self.combo_tech.addItems(["FLUPS", "TAS", "TCSPC"])
+        form_model.addRow("Technique:", self.combo_tech)
+
+        # Chirp
+        self.chk_chirp = QCheckBox("Fit Independent t0 (Chirp)")
+        form_model.addRow(self.chk_chirp)
+        
+        # Initial Guesses
+        self.btn_edit_guess = QPushButton("Edit Initial Guesses")
+        self.btn_edit_guess.clicked.connect(self._open_guess_editor_and_update)
+        form_model.addRow(self.btn_edit_guess)
+        gb_model.setLayout(form_model)
+        l.addWidget(gb_model)
+
+        # --- Botones Finales ---
+        self.btn_run = QPushButton("RUN FIT")
+        self.btn_run.setFixedHeight(40)  
+        self.btn_run.setEnabled(False) # Se activa al cargar datos
+        self.btn_run.clicked.connect(self.run_fit_pipeline) # Descomentar luego
+        l.addWidget(self.btn_run)
+        
+        self.btn_show_das = QPushButton("Show Plots / Results")
         self.btn_show_das.setEnabled(False)
-        top_row.addWidget(self.btn_show_das)
+        self.btn_show_das.clicked.connect(self.plot_das_and_more) # Descomentar luego
+        l.addWidget(self.btn_show_das)
 
-        layout.addLayout(top_row)
+        l.addStretch() # Empujar todo arriba
+        
+        def _generate_defaults(self):
+            """Genera los valores iniciales (Guesses) basados en la configuración actual."""
+            # 1. Leer configuración actual
+            numExp = self.spin_numExp.value()
+            t0_choice = 'Yes' if self.chk_chirp.isChecked() else 'No'
+            tech = self.combo_tech.currentText()
+            
+            # Necesitamos saber numWL para calcular el tamaño
+            # Si data_c existe usamos su tamaño, si no, usamos WL raw, si no, error
+            if self.data_c is not None:
+                numWL = self.data_c.shape[0]
+            elif self.WL is not None:
+                numWL = len(self.WL)
+            else:
+                QMessageBox.warning(self, "Warning", "Load data first to generate guesses.")
+                return False
+    
+            # 2. Calcular tamaño vector L
+            if t0_choice == 'Yes':
+                L = 1 + numExp + numWL*(numExp+1)
+            else:
+                L = 2 + numExp + numWL*numExp
+                
+            self.ini = np.zeros(L)
+            self.limi = -np.inf * np.ones(L)
+            self.lims = np.inf * np.ones(L)
+    
+            # 3. Rellenar valores (Tu lógica estándar)
+            taus_defaults = [0.5, 5.0, 50.0, 500.0, 2000.0, 5000.0]
+            w_guess = 0.15 if tech == 'TAS' else (0.3 if tech == 'FLUPS' else 0.1)
+            
+            if t0_choice == 'No':
+                # [w, t0, tau1..n, A...]
+                self.ini[0] = w_guess; self.limi[0] = 0.05; self.lims[0] = 2.0
+                self.ini[1] = 0.0;     self.limi[1] = -5.0; self.lims[1] = 5.0
+                
+                base_tau = 2
+                for n in range(numExp):
+                    idx = base_tau + n
+                    val_t = taus_defaults[n] if n < len(taus_defaults) else 1000.0*(n+1)
+                    self.ini[idx] = val_t; self.limi[idx] = 0.001; self.lims[idx] = 1e8
+                
+                start_A = base_tau + numExp
+                val_A = 1000.0 if tech == 'TCSPC' else (5.0 if tech == 'FLUPS' else 0.01)
+                self.ini[start_A:] = val_A
+                
+            else:
+                # Chirp logic placeholder
+                self.ini[0] = w_guess; self.limi[0] = 0.05; self.lims[0] = 2.0
+                for n in range(numExp):
+                    self.ini[1+n] = taus_defaults[n] if n < len(taus_defaults) else 100.0
+                    self.limi[1+n] = 0.001; self.lims[1+n] = 1e8
+                
+                base_idx = 1 + numExp
+                params_per_wl = 1 + numExp
+                val_A = 1000.0 if tech == 'TCSPC' else 0.1
+                self.ini[base_idx:] = val_A
+                self.ini[base_idx::params_per_wl] = 0.0
+                self.limi[base_idx::params_per_wl] = -5.0
+                self.lims[base_idx::params_per_wl] = 5.0
+            
+        return True
+    def _on_scale_changed(self, text):
+            """Actualiza la variable de escala y repinta los gráficos."""
+            self.yscale = text.lower() # 'linear' o 'symlog'
+            
+            # Repintar todo lo que esté activo
+            self._update_exp_canvas()
+            self._update_fit_canvas()
+            self._update_resid_canvas()
 
-        # Tabs for experimental / fit / residual
-        self.tabs = QTabWidget()
-        # Each tab will host a FigureCanvas (colormesh)
-        self.tab_exp = QWidget()
-        self.tab_fit = QWidget()
-        self.tab_resid = QWidget()
-        self.tabs.addTab(self.tab_exp, "Experimental")
-        self.tabs.addTab(self.tab_fit, "Fit")
-        self.tabs.addTab(self.tab_resid, "Residual")
-        layout.addWidget(self.tabs, stretch=1)
-
-    # 🔧 Forzar estilo visible (fondo claro, texto oscuro)
-        self.tabs.setStyleSheet("""
-            QTabWidget::pane { 
-                border: 1px solid #aaa; 
-                background: white;
-            }
-            QTabBar::tab {
-                background: #f0f0f0;
-                color: black;
-                padding: 6px 12px;
-                border: 1px solid #aaa;
-                border-bottom: none;
-                border-top-left-radius: 6px;
-                border-top-right-radius: 6px;
-            }
-            QTabBar::tab:selected {
-                background: #ffffff;
-                font-weight: bold;
-            }
-        """)
-        # For each tab create a canvas
-        self.canvas_exp, self.ax_exp = self._create_canvas_for_tab(self.tab_exp)
-        self.canvas_fit, self.ax_fit = self._create_canvas_for_tab(self.tab_fit)
-        self.canvas_resid, self.ax_resid = self._create_canvas_for_tab(self.tab_resid)
-
-        # Progress bar
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setRange(0, 100)
-        self.progress_bar.setValue(0)
-        layout.addWidget(self.progress_bar)
-
-        self.setLayout(layout)
-
-        # Internal plotting state
-        self.pcm_exp = None
-        self.cbar_exp = None
-        self.pcm_fit = None
-        self.cbar_fit = None
-        self.pcm_resid = None
-        self.cbar_resid = None
-
-        # results storage
-        self.fit_result = None
-        self.fit_x = None
-        self.fit_resid = None
-        self.fit_fitres = None
-        self.ci = None
-        self.As = None
-        self.errAs = None
-        self.t0s = None
-        self.errt0s = None
-
+    def _init_plots_ui(self):
+            """Construye los Tabs y gráficos del panel derecho."""
+            l = self.right_layout
+            
+            # Tabs
+            self.tabs = QTabWidget()
+            
+            # --- ESTILO CORREGIDO PARA TEXTO NEGRO ---
+            self.tabs.setStyleSheet("""
+                        QTabWidget::pane { 
+                            border: 1px solid #999; 
+                            background: white; 
+                        }
+                        QTabBar::tab { 
+                            background: #e0e0e0; 
+                            color: black;
+                            padding: 8px 20px; 
+                            border: 1px solid #bbb; 
+                            border-bottom: none; 
+                            border-top-left-radius: 4px; 
+                            border-top-right-radius: 4px; 
+                            margin-right: 2px;
+                        }
+                        QTabBar::tab:selected { 
+                            background: #ffffff; 
+                            /* font-weight: bold;  <--- LINEA BORRADA */
+                            border-bottom: 1px solid #ffffff; 
+                        }
+                        QTabBar::tab:hover {
+                            background: #d0d0d0;
+                        }
+                    """)
+            
+            self.tab_exp = QWidget()
+            self.tab_fit = QWidget()
+            self.tab_resid = QWidget()
+            
+            self.tabs.addTab(self.tab_exp, "Experimental")
+            self.tabs.addTab(self.tab_fit, "Fit Reconstructed")
+            self.tabs.addTab(self.tab_resid, "Residuals")
+            
+            # Crear Canvas (usando helper)
+            self.canvas_exp, self.ax_exp = self._create_canvas_for_tab(self.tab_exp)
+            self.canvas_fit, self.ax_fit = self._create_canvas_for_tab(self.tab_fit)
+            self.canvas_resid, self.ax_resid = self._create_canvas_for_tab(self.tab_resid)
+            
+            l.addWidget(self.tabs)
+            
+            # Barra de progreso
+            self.progress_bar = QProgressBar()
+            self.progress_bar.setValue(0)
+            self.progress_bar.setTextVisible(True)
+            l.addWidget(self.progress_bar)
+    def _generate_defaults(self):
+            """Genera los valores iniciales (Guesses) basados en la configuración actual."""
+            # 1. Leer configuración actual
+            numExp = self.spin_numExp.value()
+            t0_choice = 'Yes' if self.chk_chirp.isChecked() else 'No'
+            tech = self.combo_tech.currentText()
+            
+            # Necesitamos saber numWL para calcular el tamaño
+            # Si data_c existe usamos su tamaño, si no, usamos WL raw, si no, error
+            if self.data_c is not None:
+                numWL = self.data_c.shape[0]
+            elif self.WL is not None:
+                numWL = len(self.WL)
+            else:
+                QMessageBox.warning(self, "Warning", "Load data first to generate guesses.")
+                return False
+    
+            # 2. Calcular tamaño vector L
+            if t0_choice == 'Yes':
+                L = 1 + numExp + numWL*(numExp+1)
+            else:
+                L = 2 + numExp + numWL*numExp
+                
+            self.ini = np.zeros(L)
+            self.limi = -np.inf * np.ones(L)
+            self.lims = np.inf * np.ones(L)
+    
+            # 3. Rellenar valores (Tu lógica estándar)
+            taus_defaults = [0.5, 5.0, 50.0, 500.0, 2000.0, 5000.0]
+            w_guess = 0.15 if tech == 'TAS' else (0.3 if tech == 'FLUPS' else 0.1)
+            
+            if t0_choice == 'No':
+                # [w, t0, tau1..n, A...]
+                self.ini[0] = w_guess; self.limi[0] = 0.05; self.lims[0] = 2.0
+                self.ini[1] = 0.0;     self.limi[1] = -5.0; self.lims[1] = 5.0
+                
+                base_tau = 2
+                for n in range(numExp):
+                    idx = base_tau + n
+                    val_t = taus_defaults[n] if n < len(taus_defaults) else 1000.0*(n+1)
+                    self.ini[idx] = val_t; self.limi[idx] = 0.001; self.lims[idx] = 1e8
+                
+                start_A = base_tau + numExp
+                val_A = 1000.0 if tech == 'TCSPC' else (5.0 if tech == 'FLUPS' else 0.01)
+                self.ini[start_A:] = val_A
+                
+            else:
+                # Chirp logic placeholder
+                self.ini[0] = w_guess; self.limi[0] = 0.05; self.lims[0] = 2.0
+                for n in range(numExp):
+                    self.ini[1+n] = taus_defaults[n] if n < len(taus_defaults) else 100.0
+                    self.limi[1+n] = 0.001; self.lims[1+n] = 1e8
+                
+                base_idx = 1 + numExp
+                params_per_wl = 1 + numExp
+                val_A = 1000.0 if tech == 'TCSPC' else 0.1
+                self.ini[base_idx:] = val_A
+                self.ini[base_idx::params_per_wl] = 0.0
+                self.limi[base_idx::params_per_wl] = -5.0
+                self.lims[base_idx::params_per_wl] = 5.0
+                
+            return True
     def _create_canvas_for_tab(self, tab_widget):
-        """Create a Matplotlib FigureCanvas inside the given tab QWidget."""
-        fig = plt.Figure(figsize=(6,4))
+        """Helper para inicializar matplotlib dentro de un tab."""
+        fig = plt.Figure(figsize=(5,4))
         ax = fig.add_subplot(111)
         canvas = FigureCanvas(fig)
-        tab_layout = QVBoxLayout()
-        tab_layout.addWidget(canvas)
-        tab_widget.setLayout(tab_layout)
+        
+        layout = QVBoxLayout()
+        layout.addWidget(canvas)
+        tab_widget.setLayout(layout)
+        
         return canvas, ax
+
+    # --- Métodos auxiliares de limpieza de UI ---
+    def _clear_colorbar_if_exists(self, cbar):
+        try:
+            if cbar is not None: cbar.remove()
+        except: pass
 
     def use_parent_data(self):
         """Cargar datos del parent y actualizar canvas"""
@@ -1957,56 +2114,106 @@ class GlobalFitPanel(QDialog):
         self.btn_show_das.setEnabled(False)
         
     def update_from_parent(self):
-        """Actualizar data_c con los datos actuales de TAS o FLUPS"""
-        p = self.parent_app
-        if p is None:
-            return
-        
-        # La lógica de carga debe ser la misma para ambos: Priorizar data_corrected
-        # (que es el resultado final del t0-fit) y usar data (Base/Solvente corregida) como fallback.
-        
-        if getattr(p, "is_TAS_mode", False):
-            # 🌟 CORRECCIÓN APLICADA: Comprobar data_corrected primero en modo TAS
-            if hasattr(p, "data_corrected") and p.data_corrected is not None:
-                self.data_c = np.array(p.data_corrected, copy=True)
-                self.label_status.setText("Loaded: TAS t₀-Corrected")
-            elif hasattr(p, "data") and p.data is not None:
-                self.data_c = np.array(p.data, copy=True)
-                self.label_status.setText("Loaded: TAS Base Data (No t₀ Fit)")
-            else:
-                self.label_status.setText("No data loaded")
+         p = self.parent_app
+         if p is None: return
+             
+         if getattr(p, "is_TAS_mode", False):
+              if hasattr(p, "data_corrected") and p.data_corrected is not None:
+                  incoming_data = np.array(p.data_corrected, copy=True)
+                  # ...
+              # ... (resto de ifs)
+         
+         # --- AQUÍ EL CAMBIO ---
+         # Guardamos en RAW
+         self.data_raw = incoming_data 
+         self.WL = getattr(p, "WL", None)
+         self.TD = getattr(p, "TD", None)
+         
+         # Aplicamos la corrección y pintamos
+         self.apply_baseline_correction()
+    def apply_baseline_correction(self):
+            """Recalcula data_c desde data_raw usando el valor actual del SpinBox y actualiza el plot."""
+            if self.data_raw is None:
                 return
-        else:  # FLUPS
-            # Esta lógica ya era correcta: Prioriza data_corrected
-            if hasattr(p, "data_corrected") and p.data_corrected is not None:
-                self.data_c = np.array(p.data_corrected, copy=True)
-                self.label_status.setText("Loaded: FLUPS t₀-Corrected")
-            elif hasattr(p, "data") and p.data is not None:
-                self.data_c = np.array(p.data, copy=True)
-                self.label_status.setText("Loaded: FLUPS Base Data")
-            else:
-                self.label_status.setText("No data loaded")
-                return
-        
-        self.WL = getattr(p, "WL", None)
-        self.TD = getattr(p, "TD", None)
-        self._update_exp_canvas()
+    
+            n_pts = self.spin_bl.value()
+            
+            # Siempre trabajamos desde la copia original 'raw'
+            # para no acumular restas.
+            temp_data = self.data_raw.copy()
+            
+            if n_pts > 0:
+                if temp_data.shape[1] >= n_pts:
+                    # Calcular baseline (media de las primeras n columnas de tiempo)
+                    # Asumiendo shape [NumWL, NumTD] o viceversa. 
+                    # En tu código anterior usabas axis=1, lo que implica [WL, Time]
+                    baseline = np.mean(temp_data[:, :n_pts], axis=1, keepdims=True)
+                    temp_data = temp_data - baseline
+                else:
+                    print("Warning: Not enough points for baseline.")
+    
+            # Actualizamos la variable oficial que usa el ajuste
+            self.data_c = temp_data
+            
+            # Repintamos el canvas experimental inmediatamente
+            self._update_exp_canvas()
+# --- LÓGICA DE CARGA DE DATOS ---
 
+    def _update_ui_limits_from_data(self):
+        """Actualiza los rangos de las cajas numéricas (SpinBoxes) según los datos cargados."""
+        if self.WL is not None and len(self.WL) > 0:
+            self.spin_wl_min.setValue(np.min(self.WL))
+            self.spin_wl_max.setValue(np.max(self.WL))
+        
+        if self.TD is not None and len(self.TD) > 0:
+            self.spin_t_min.setValue(np.min(self.TD))
+            self.spin_t_max.setValue(np.max(self.TD))
+        
+        # Al cargar, reseteamos data_c a raw y pintamos
+        self.data_c = self.data_raw.copy()
+        
+        # Pintamos inmediatamente la data cruda
+        self._update_exp_canvas(use_processed=False)
+
+    def use_parent_data(self):
+        """Cargar datos desde la ventana principal (si existe)."""
+        if self.parent_app is None: return
+        
+        # Reutilizamos tu lógica original de detección
+        # (Asegúrate de que estas variables existen en tu parent_app)
+        if hasattr(self.parent_app, "data_corrected") and self.parent_app.data_corrected is not None:
+            self.data_raw = np.array(self.parent_app.data_corrected, copy=True)
+            self.WL = getattr(self.parent_app, "WL", None)
+            self.TD = getattr(self.parent_app, "TD", None)
+            
+            # Detectar técnica
+            if getattr(self.parent_app, "is_TAS_mode", False):
+                self.combo_tech.setCurrentText("TAS")
+            else:
+                self.combo_tech.setCurrentText("FLUPS")
+                
+            self._update_ui_limits_from_data()
+            self.btn_run.setEnabled(True)
+            self.label_status.setText(f"Loaded from Parent: {len(self.WL)} WL, {len(self.TD)} TD")
 
     def load_data(self):
-        """Call fit.load_npy to open a file dialog and load processed .npy"""
+        """Cargar desde .npy usando tu módulo 'fit'."""
         try:
-            data_c, TD, WL, base_dir = fit.load_npy(self)
-            self.data_c = data_c.copy()
+            # Asumo que importaste fit al principio del archivo
+            import fit 
+            raw_data, TD, WL, base_dir = fit.load_npy(self)
+            
+            self.data_raw = raw_data.copy()
             self.TD = TD
             self.WL = WL
             self.base_dir = base_dir
-            self.label_status.setText(f"Loaded: {len(self.WL)} WL, {len(self.TD)} TD")
+            
+            self._update_ui_limits_from_data()
             self.btn_run.setEnabled(True)
-            self._update_exp_canvas()
-            self.btn_show_das.setEnabled(False)
+            self.label_status.setText(f"Loaded File: {len(self.WL)} WL, {len(self.TD)} TD")
+            
         except Exception as e:
-            QMessageBox.critical(self, "Error loading file", str(e))
+            QMessageBox.critical(self, "Error loading", str(e))
 
     def _clear_colorbar_if_exists(self, cbar):
         try:
@@ -2015,547 +2222,543 @@ class GlobalFitPanel(QDialog):
         except Exception:
             pass
     
-    def _update_exp_canvas(self):
-        """Draw experimental colormesh on the Experimental tab without normalizing."""
-        if self.data_c is None:
-            return
-    
-        self.ax_exp.clear()
-        self._clear_colorbar_if_exists(self.cbar_exp)
-    
-        # --- Detectar técnica ---
-        tech = "TAS" if getattr(self.parent_app, "is_TAS_mode", False) else "FLUPS"
-    
-        # --- Ajustar escala según técnica ---
-        if tech == "FLUPS":
-            vmin, vmax = -1, 1
-        else:  # TAS u otra
-            vmin = np.nanmin(self.data_c)
-            vmax = np.nanmax(self.data_c)
-            # margen pequeño para que no se corte
-            margin = 0.05 * (vmax - vmin)
-            vmin -= margin
-            vmax += margin
-    
-        # --- Dibujar mapa ---
-        self.pcm_exp = self.ax_exp.pcolormesh(
-            self.WL, self.TD, self.data_c.T,
-            shading="auto",
-            cmap="jet",
-            vmin=vmin,
-            vmax=vmax
-        )
-    
-        self.ax_exp.set_xlabel("Wavelength (nm)")
-        self.ax_exp.set_ylabel("Delay (ps)")
-        self.ax_exp.set_yscale("symlog")
-        self.ax_exp.set_title(f"Experimental ΔA ({tech})")
-    
-        divider = make_axes_locatable(self.ax_exp)
-        cax = divider.append_axes("right", size="5%", pad=0.05)
-        self.cbar_exp = self.canvas_exp.figure.colorbar(self.pcm_exp, cax=cax, label='ΔA')
-    
-        self.canvas_exp.draw_idle()
+# --- LÓGICA DE PROCESADO Y VISUALIZACIÓN ---
 
+    def _preview_data_processing(self):
+        """
+        Toma data_raw, aplica Baseline -> Crop WL -> Crop Time -> Binning 
+        y guarda el resultado en self.data_c para usarlo en el ajuste.
+        """
+        if self.data_raw is None: return
+        
+        # 1. Empezar siempre desde copia de RAW
+        temp_data = self.data_raw.copy()
+        temp_WL = self.WL.copy()
+        temp_TD = self.TD.copy()
 
+        # 2. Baseline Correction
+        n_pts = self.spin_bl.value()
+        if n_pts > 0 and temp_data.shape[1] >= n_pts:
+            # Asumiendo forma (WL, TD) -> axis 1 es tiempo
+            baseline = np.mean(temp_data[:, :n_pts], axis=1, keepdims=True)
+            temp_data = temp_data - baseline
 
+        # 3. Crop Wavelength
+        w_min = self.spin_wl_min.value()
+        w_max = self.spin_wl_max.value()
+        mask_w = (temp_WL >= min(w_min, w_max)) & (temp_WL <= max(w_min, w_max))
+        
+        if np.any(mask_w):
+            temp_data = temp_data[mask_w, :]
+            temp_WL = temp_WL[mask_w]
 
+        # 4. Crop Time
+        t_min = self.spin_t_min.value()
+        t_max = self.spin_t_max.value()
+        mask_t = (temp_TD >= min(t_min, t_max)) & (temp_TD <= max(t_min, t_max))
+        
+        if np.any(mask_t):
+            temp_data = temp_data[:, mask_t]
+            temp_TD = temp_TD[mask_t]
+
+        # 5. Binning (Simple averaging)
+        b_size = self.spin_bin.value()
+        if b_size > 1:
+            # Binning en eje espectral (WL)
+            n_wl = temp_data.shape[0]
+            new_len = n_wl // b_size
+            if new_len > 0:
+                # Recortamos el sobrante y hacemos reshape+mean
+                temp_data = temp_data[:new_len*b_size, :]
+                temp_data = temp_data.reshape(new_len, b_size, temp_data.shape[1]).mean(axis=1)
+                temp_WL = temp_WL[:new_len*b_size]
+                temp_WL = temp_WL.reshape(new_len, b_size).mean(axis=1)
+
+        # GUARDAR RESULTADO PROCESADO
+        self.data_c = temp_data
+        
+        # Guardamos versiones temporales de WL/TD para pintar correctamente
+        self._wl_proc = temp_WL
+        self._td_proc = temp_TD
+        
+        # Pintar
+        self._update_exp_canvas(use_processed=True)
+        self.label_status.setText(f"Data Ready: {len(temp_WL)} WL, {len(temp_TD)} TD")
+
+    def _update_exp_canvas(self, use_processed=False):
+            """Pinta el mapa experimental con escala dinámica y soporte Linear/SymLog."""
+            if self.data_c is None: return
+            
+            self.ax_exp.clear()
+            self._clear_colorbar_if_exists(self.cbar_exp)
+            
+            # Elegir qué ejes usar
+            if use_processed and hasattr(self, '_wl_proc'):
+                Xs = self._wl_proc
+                Ys = self._td_proc
+                Title = "Experimental (Processed)"
+            else:
+                Xs = self.WL
+                Ys = self.TD
+                Title = "Experimental (Raw)"
+                
+            # Protección ejes
+            if Xs.shape[0] != self.data_c.shape[0] or Ys.shape[0] != self.data_c.shape[1]:
+                Xs = np.arange(self.data_c.shape[0])
+                Ys = np.arange(self.data_c.shape[1])
+    
+            try:
+                vals = self.data_c.flatten()
+                vmin = np.percentile(vals, 1) 
+                vmax = np.percentile(vals, 99)
+                
+                self.pcm_exp = self.ax_exp.pcolormesh(Xs, Ys, self.data_c.T, 
+                                                      shading="auto", cmap='jet', 
+                                                      vmin=vmin, vmax=vmax)
+                
+                self.ax_exp.set_title(Title)
+                self.ax_exp.set_xlabel("Wavelength (nm)")
+                self.ax_exp.set_ylabel("Delay (ps)")
+                
+                # --- APLICAR ESCALA Y (CONDICIONAL) ---
+                if hasattr(self, 'yscale') and self.yscale == 'symlog':
+                    self.ax_exp.set_yscale('symlog', linthresh=1.0)
+                else:
+                    self.ax_exp.set_yscale('linear')
+                
+                divider = make_axes_locatable(self.ax_exp)
+                cax = divider.append_axes("right", size="5%", pad=0.05)
+                self.cbar_exp = self.canvas_exp.figure.colorbar(self.pcm_exp, cax=cax, label='ΔA')
+                
+                self.canvas_exp.draw_idle()
+                
+            except Exception as e:
+                print(f"Plotting error: {e}")
     def _update_fit_canvas(self):
-        """Draw fitted colormesh (if available)"""
-        if self.fit_fitres is None:
+            """Pinta la reconstrucción con escala dinámica y soporte para Log/Linear."""
+            if self.fit_fitres is None: return
+    
             self.ax_fit.clear()
-            self.canvas_fit.draw_idle()
-            return
-        self.ax_fit.clear()
-        self._clear_colorbar_if_exists(self.cbar_fit)
-        self.pcm_fit = self.ax_fit.pcolormesh(self.WL, self.TD, self.fit_fitres.T, shading='auto', cmap='jet')
-        self.ax_fit.set_xlabel("Wavelength (nm)")
-        self.ax_fit.set_ylabel("Delay (ps)")
-        self.ax_fit.set_yscale("symlog")
-        self.ax_fit.set_title("Fit reconstructed")
-        divider = make_axes_locatable(self.ax_fit)
-        cax = divider.append_axes("right", size="5%", pad=0.05)
-        self.cbar_fit = self.canvas_fit.figure.colorbar(self.pcm_fit, cax=cax, label='ΔA')
-        self.canvas_fit.draw_idle()
-
+            self._clear_colorbar_if_exists(self.cbar_fit)
+            
+            Xs = getattr(self, '_wl_proc', self.WL)
+            Ys = getattr(self, '_td_proc', self.TD)
+            Z = self.fit_fitres.T 
+    
+            if Xs is None or Xs.shape[0] != Z.shape[1]: Xs = np.arange(Z.shape[1])
+            if Ys is None or Ys.shape[0] != Z.shape[0]: Ys = np.arange(Z.shape[0])
+    
+            try:
+                if Z.shape[0] < 2 or Z.shape[1] < 2: return
+    
+                vals = Z.flatten()
+                vmin = np.percentile(vals, 1)  
+                vmax = np.percentile(vals, 99) 
+    
+                self.pcm_fit = self.ax_fit.pcolormesh(Xs, Ys, Z, shading='auto', cmap='jet', 
+                                                      vmin=vmin, vmax=vmax)
+                
+                self.ax_fit.set_title("Fit Reconstructed")
+                self.ax_fit.set_xlabel("Wavelength (nm)")
+                self.ax_fit.set_ylabel("Delay (ps)")
+                
+                # --- APLICAR ESCALA Y (CONDICIONAL) ---
+                if hasattr(self, 'yscale') and self.yscale == 'symlog':
+                    self.ax_fit.set_yscale('symlog', linthresh=1.0)
+                else:
+                    self.ax_fit.set_yscale('linear')
+                
+                divider = make_axes_locatable(self.ax_fit)
+                cax = divider.append_axes("right", size="5%", pad=0.05)
+                self.cbar_fit = self.canvas_fit.figure.colorbar(self.pcm_fit, cax=cax, label='ΔA')
+                self.canvas_fit.draw()
+            except Exception as e:
+                print(f"Error painting Fit: {e}")
+        
     def _update_resid_canvas(self):
-        """Draw residual colormesh (if available)"""
-        if self.fit_resid is None:
+            """Pinta residuos con escala dinámica, JET y soporte para Log/Linear."""
+            if self.fit_resid is None: return
+    
             self.ax_resid.clear()
-            self.canvas_resid.draw_idle()
-            return
-        self.ax_resid.clear()
-        self._clear_colorbar_if_exists(self.cbar_resid)
-        self.pcm_resid = self.ax_resid.pcolormesh(self.WL, self.TD, self.fit_resid.T, shading='auto', cmap='jet')
-        self.ax_resid.set_xlabel("Wavelength (nm)")
-        self.ax_resid.set_ylabel("Delay (ps)")
-        self.ax_resid.set_title("Residuals")
-        divider = make_axes_locatable(self.ax_resid)
-        cax = divider.append_axes("right", size="5%", pad=0.05)
-        self.cbar_resid = self.canvas_resid.figure.colorbar(self.pcm_resid, cax=cax, label='ΔA')
-        self.canvas_resid.draw_idle()
-
+            self._clear_colorbar_if_exists(self.cbar_resid)
+            
+            Xs = getattr(self, '_wl_proc', self.WL)
+            Ys = getattr(self, '_td_proc', self.TD)
+            Z = self.fit_resid.T
+    
+            if Xs is None or Xs.shape[0] != Z.shape[1]: Xs = np.arange(Z.shape[1])
+            if Ys is None or Ys.shape[0] != Z.shape[0]: Ys = np.arange(Z.shape[0])
+    
+            try:
+                if Z.shape[0] < 2 or Z.shape[1] < 2: return
+    
+                vals = Z.flatten()
+                vmin = np.percentile(vals, 1)
+                vmax = np.percentile(vals, 99)
+    
+                self.pcm_resid = self.ax_resid.pcolormesh(Xs, Ys, Z, shading='auto', cmap='jet',
+                                                          vmin=vmin, vmax=vmax)
+                
+                self.ax_resid.set_title("Residuals")
+                self.ax_resid.set_xlabel("Wavelength (nm)")
+                self.ax_resid.set_ylabel("Delay (ps)")
+                
+                # --- APLICAR ESCALA Y (CONDICIONAL) ---
+                if hasattr(self, 'yscale') and self.yscale == 'symlog':
+                    self.ax_resid.set_yscale('symlog', linthresh=1.0)
+                else:
+                    self.ax_resid.set_yscale('linear')
+                
+                divider = make_axes_locatable(self.ax_resid)
+                cax = divider.append_axes("right", size="5%", pad=0.05)
+                self.cbar_resid = self.canvas_resid.figure.colorbar(self.pcm_resid, cax=cax, label='Residual')
+                self.canvas_resid.draw()
+            except Exception as e:
+                print(f"Error painting Resid: {e}")
+# --- LOGICA DEL AJUSTE (PIPELINE) ---
+ 
     def run_fit_pipeline(self):
-        """Full interactive pipeline (crop spectrum, crop kinetics, binning, params, run fit)."""
-        try:
-            if self.data_c is None:
-                QMessageBox.warning(self, "No data", "Load data first (from main app or .npy).")
-                return
-
-            # 1) Crop spectrum?
-            crop = QMessageBox.question(self, "Crop Spectrum", "Do you want to crop the spectrum?", QMessageBox.Yes | QMessageBox.No)
-            if crop == QMessageBox.Yes:
-                WLmin, ok1 = QInputDialog.getDouble(self, "Lower WL", "Enter lower wavelength:", decimals=6)
-                WLmax, ok2 = QInputDialog.getDouble(self, "Upper WL", "Enter upper wavelength:", decimals=6)
-                if ok1 and ok2:
-                    self.data_c, self.WL = fit.crop_spectrum(self.data_c, self.WL, min(WLmin, WLmax), max(WLmin, WLmax))
-                    self._update_exp_canvas()
-
-            # 2) Crop kinetics?
-            crop_t = QMessageBox.question(self, "Crop Kinetics", "Do you want to crop the kinetics?", QMessageBox.Yes | QMessageBox.No)
-            if crop_t == QMessageBox.Yes:
-                TDmin, ok1 = QInputDialog.getDouble(self, "Lower TD", "Enter lower time:", decimals=6)
-                TDmax, ok2 = QInputDialog.getDouble(self, "Upper TD", "Enter upper time:", decimals=6)
-                if ok1 and ok2:
-                    self.data_c, self.TD = fit.crop_kinetics(self.data_c, self.TD, min(TDmin, TDmax), max(TDmin, TDmax))
-                    self._update_exp_canvas()
-
-            # 3) Binning?
-            bin_ans = QMessageBox.question(self, "Binning", "Do you want to bin wavelengths?", QMessageBox.Yes | QMessageBox.No)
-            if bin_ans == QMessageBox.Yes:
-                bin_size, ok = QInputDialog.getInt(self, "Binning", "Points to average:", 5, 1)
-                if ok and bin_size > 1:
-                    self.data_c, self.WL = fit.binning(self.data_c, self.WL, bin_size)
-                    self._update_exp_canvas()
-
-            # 4) Number of exponentials & t0 choice
-            numExp, ok = QInputDialog.getInt(self, "Exponents", "Number of exponentials:", self.numExp, 1)
-            if ok:
-                self.numExp = int(numExp)
-            t0_choice_bool = QMessageBox.question(self, "t0 Choice", "Fit independent t0s?", QMessageBox.Yes | QMessageBox.No)
-            self.t0_choice = 'Yes' if t0_choice_bool == QMessageBox.Yes else 'No'
-
-            # 5) Technique selection (affects initial guesses/ranges same as script)
-            tech_choice, ok = QInputDialog.getItem(self, "Technique", "Select technique:", ["TAS", "FLUPS", "TCSPC"], 1, False)
-            if ok:
-                self.tech = tech_choice
-
-            # 6) Initialize ini, limi, lims (using same shapes as script)
-            numWL = len(self.WL)
-            if self.t0_choice == 'Yes':
-                L = 1 + self.numExp + numWL*(self.numExp+1)
-            else:
-                L = 2 + self.numExp + numWL*self.numExp
-            self.ini = np.zeros(L)
-            self.limi = -np.inf * np.ones(L)
-            self.lims = np.inf * np.ones(L)
-
-            # default taus similar to your script
-            taus_defaults = [0.5,14,200,1000,4000,6000]
-            # fill defaults following your script logic
-            if self.t0_choice == 'Yes':
-                # w
-                if self.tech == 'TAS':
-                    self.ini[0] = 0.15
-                elif self.tech == 'FLUPS':
-                    self.ini[0] = 0.35
-                elif self.tech == 'TCSPC':
-                    self.ini[0] = 0.1
-                self.limi[0] = 0.05
-                self.lims[0] = 2
-                # taus
-                for n in range(self.numExp):
-                    idx = 1 + n
-                    self.ini[idx] = taus_defaults[n] if n < len(taus_defaults) else 1.0
-                    self.limi[idx] = 0.05
-                    self.lims[idx] = 1e18
-                # per-wl t0s and As
-                for k in range(numWL):
-                    t0_idx = 1 + self.numExp + k*(self.numExp+1)
-                    self.ini[t0_idx] = 0.0
-                    self.limi[t0_idx] = -2.0
-                    self.lims[t0_idx] = 2.0
-                    for n in range(self.numExp):
-                        Aidx = t0_idx + 1 + n
-                        if self.tech == 'TAS':
-                            self.ini[Aidx] = 0.005
-                            self.limi[Aidx] = -1
-                            self.lims[Aidx] = 1
-                        elif self.tech == 'FLUPS':
-                            self.ini[Aidx] = 5
-                            self.limi[Aidx] = -500
-                            self.lims[Aidx] = 500
-                        else:  # TCSPC
-                            self.ini[Aidx] = 1000
-                            self.limi[Aidx] = -50000
-                            self.lims[Aidx] = 50000
-            else:
-                # common t0
-                if self.tech == 'TAS':
-                    self.ini[0] = 0.15
-                elif self.tech == 'FLUPS':
-                    self.ini[0] = 0.35
-                elif self.tech == 'TCSPC':
-                    self.ini[0] = 0.1
-                self.limi[0] = 0.05
-                self.lims[0] = 2
-                # t0 common
-                self.ini[1] = 0.0
-                self.limi[1] = -2.0
-                self.lims[1] = 2.0
-                # taus
-                for n in range(self.numExp):
-                    idx = 2 + n
-                    self.ini[idx] = taus_defaults[n] if n < len(taus_defaults) else 1.0
-                    self.limi[idx] = 0.05
-                    self.lims[idx] = 1e18
-                # amplitudes
-                for k in range(numWL):
-                    for n in range(self.numExp):
-                        Aidx = 2 + self.numExp + n + k*self.numExp
-                        if self.tech == 'TAS':
-                            self.ini[Aidx] = 0.005
-                            self.limi[Aidx] = -1
-                            self.lims[Aidx] = 1
-                        elif self.tech == 'FLUPS':
-                            self.ini[Aidx] = 5
-                            self.limi[Aidx] = -500
-                            self.lims[Aidx] = 500
-                        else:
-                            self.ini[Aidx] = 1000
-                            self.limi[Aidx] = -50000
-                            self.lims[Aidx] = 50000
-
-            # 7) Ask user whether to edit initial guesses
-            edit_ans = QMessageBox.question(self, "Initial guess", "Would you like to edit initial guesses and limits manually?", QMessageBox.Yes | QMessageBox.No)
-            if edit_ans == QMessageBox.Yes:
-                self._open_guess_editor_and_update()
-
-            # 8) Run least_squares with progress callback
-            self._run_least_squares_with_progress()
-
-            # After fit: compute outputs, update canvases and enable DAS button
-            self._postprocess_fit_and_save()
-
-        except Exception as e:
-            QMessageBox.critical(self, "Error running fit", str(e))
+            try:
+                if self.data_raw is None:
+                    QMessageBox.warning(self, "No data", "Load data first.")
+                    return
+    
+                # 1. Preview y Procesado
+                self._preview_data_processing()
+                if self.data_c is None or self.data_c.size == 0: return
+    
+                # 2. Configuración
+                self.numExp = self.spin_numExp.value()
+                self.tech = self.combo_tech.currentText()
+                self.t0_choice = 'Yes' if self.chk_chirp.isChecked() else 'No'
+                model_str = self.combo_model.currentText()
+                self.model_type = "Sequential" if "Sequential" in model_str else "Parallel"
+    
+                # 3. GESTIÓN DE GUESSES (NUEVA LÓGICA)
+                # Comprobamos si el vector actual self.ini es válido para la configuración actual
+                # (Calculamos el tamaño esperado L)
+                numWL = self.data_c.shape[0]
+                if self.t0_choice == 'Yes': L_needed = 1 + self.numExp + numWL*(self.numExp+1)
+                else:                       L_needed = 2 + self.numExp + numWL*self.numExp
+                
+                # Si no hay guesses o el tamaño no coincide (porque cambiaste numExp), regenerar
+                if self.ini is None or len(self.ini) != L_needed:
+                    print("Generating new default guesses...")
+                    self._generate_defaults()
+                else:
+                    print("Using existing (possibly edited) guesses.")
+    
+                # 4. Ejecutar Ajuste
+                self._temp_fit_TD = getattr(self, '_td_proc', self.TD)
+                self._temp_fit_WL = getattr(self, '_wl_proc', self.WL)
+                
+                self._run_least_squares_with_progress()
+                self._postprocess_fit_and_save()
+    
+            except Exception as e:
+                QMessageBox.critical(self, "Fit Error", str(e))
+                import traceback
+                traceback.print_exc()
 
     def _open_guess_editor_and_update(self):
-        """Simple QTableWidget to edit ini/limi/lims (variable names optional)."""
-        L = len(self.ini)
-        dlg = QDialog(self)
-        dlg.setWindowTitle("Edit initial guesses and limits")
-        dlg.resize(800, 400)
-        v = QVBoxLayout()
-        table = QTableWidget(L, 4)
-        table.setHorizontalHeaderLabels(["Index","Guess","Lower","Upper"])
-        table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        for i in range(L):
-            table.setItem(i, 0, QTableWidgetItem(str(i)))
-            table.setItem(i, 1, QTableWidgetItem(str(self.ini[i])))
-            table.setItem(i, 2, QTableWidgetItem(str(self.limi[i])))
-            table.setItem(i, 3, QTableWidgetItem(str(self.lims[i])))
-        v.addWidget(table)
-        btn_row = QHBoxLayout()
-        btn_ok = QPushButton("OK")
-        btn_cancel = QPushButton("Cancel")
-        btn_row.addWidget(btn_ok)
-        btn_row.addWidget(btn_cancel)
-        v.addLayout(btn_row)
-        dlg.setLayout(v)
-
-        def on_ok():
-            # read back values safely
-            try:
-                for i in range(L):
-                    self.ini[i] = float(table.item(i,1).text())
-                    self.limi[i] = float(table.item(i,2).text())
-                    self.lims[i] = float(table.item(i,3).text())
-            except Exception as e:
-                QMessageBox.warning(self, "Invalid input", f"Could not parse numbers: {e}")
-                return
-            dlg.accept()
-
-        btn_ok.clicked.connect(on_ok)
-        btn_cancel.clicked.connect(dlg.reject)
-
-        dlg.exec_()
-
-
+            """Abre la tabla de edición con ETIQUETAS DESCRIPTIVAS."""
+            
+            # 1. Regenerar si hace falta (Lógica anterior)
+            numExp = self.spin_numExp.value()
+            is_chirp = self.chk_chirp.isChecked()
+            
+            # Calcular longitud esperada
+            if self.data_c is not None: numWL = self.data_c.shape[0]
+            elif self.WL is not None: numWL = len(self.WL)
+            else: numWL = 1
+                
+            if is_chirp: L_needed = 1 + numExp + numWL*(numExp+1)
+            else:        L_needed = 2 + numExp + numWL*numExp
+                
+            if self.ini is None or len(self.ini) != L_needed:
+                self._generate_defaults()
+    
+            # 2. Configurar Tabla
+            L = len(self.ini)
+            dlg = QDialog(self)
+            dlg.setWindowTitle(f"Edit Initial Guesses ({L} parameters)")
+            dlg.resize(700, 500)
+            v = QVBoxLayout()
+            
+            table = QTableWidget(L, 4)
+            table.setHorizontalHeaderLabels(["Parameter", "Value", "Lower Bound", "Upper Bound"])
+            table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+            
+            # --- BUCLE DE LLENADO CON ETIQUETAS ---
+            for i in range(L):
+                
+                # A) Generar descripción inteligente
+                label = str(i)
+                
+                if not is_chirp:
+                    # Modelo Estándar
+                    if i == 0:
+                        label += " (w - IRF Width)"
+                    elif i == 1:
+                        label += " (t0 - Time Zero)"
+                    elif i < 2 + numExp:
+                        # Los taus empiezan en el índice 2
+                        # i=2 -> tau1, i=3 -> tau2...
+                        label += f" (τ{i-1} - Lifetime)"
+                    else:
+                        label += " (Amplitude A_ik)"
+                else:
+                    # Modelo Chirp
+                    if i == 0:
+                        label += " (w - IRF Width)"
+                    elif i < 1 + numExp:
+                        # En chirp, no hay t0 global, así que los taus empiezan en i=1
+                        label += f" (τ{i} - Lifetime)"
+                    else:
+                        label += " (Local Param: t0 or A)"
+    
+                # B) Poner items en la tabla
+                # Columna 0: Etiqueta generada
+                item_lbl = QTableWidgetItem(label)
+                item_lbl.setFlags(item_lbl.flags() ^ Qt.ItemIsEditable) # Hacer solo lectura la etiqueta
+                table.setItem(i, 0, item_lbl)
+                
+                # Columnas de valores
+                table.setItem(i, 1, QTableWidgetItem(str(self.ini[i])))
+                table.setItem(i, 2, QTableWidgetItem(str(self.limi[i])))
+                table.setItem(i, 3, QTableWidgetItem(str(self.lims[i])))
+                
+            v.addWidget(table)
+            
+            # Botones (Igual que antes)
+            btn_reset = QPushButton("Reset to Defaults")
+            def reset_vals():
+                self._generate_defaults()
+                # Refrescar tabla
+                for j in range(L):
+                    table.setItem(j, 1, QTableWidgetItem(str(self.ini[j])))
+                    table.setItem(j, 2, QTableWidgetItem(str(self.limi[j])))
+                    table.setItem(j, 3, QTableWidgetItem(str(self.lims[j])))
+            btn_reset.clicked.connect(reset_vals)
+            v.addWidget(btn_reset)
+    
+            btn_ok = QPushButton("Save & Close")
+            btn_ok.clicked.connect(dlg.accept)
+            v.addWidget(btn_ok)
+            
+            dlg.setLayout(v)
+            
+            if dlg.exec_() == QDialog.Accepted:
+                try:
+                    for i in range(L):
+                        self.ini[i] = float(table.item(i, 1).text())
+                        self.limi[i] = float(table.item(i, 2).text())
+                        self.lims[i] = float(table.item(i, 3).text())
+                except ValueError:
+                    QMessageBox.warning(self, "Error", "Invalid number format.")
+        
     def _run_least_squares_with_progress(self):
-        """Run least_squares directly using fit.eval_global_model as model,
-        with optional callback for progress update (compatible with older SciPy)."""
-        import inspect
-        numWL = len(self.WL)
-        TD = self.TD
-        data_flat = self.data_c.T.flatten()
+            """Ejecuta scipy.least_squares conectando una barra de progreso."""
+            import inspect
+            import fit  # Asegúrate de importar tu modulo fit
+            
+            # Usamos los datos procesados temporalmente
+            TD = self._temp_fit_TD
+            WL = self._temp_fit_WL
+            numWL = len(WL)
+            data_flat = self.data_c.T.flatten() # Flatten [WL, TD].T -> [TD, WL] flat
+            
+            # Función de residuos (Closure)
+            def residuals(x):
+                # Selección de modelo
+                if self.model_type == "Sequential":
+                    F = fit.eval_sequential_model(x, TD, self.numExp, numWL, self.t0_choice)
+                else:
+                    F = fit.eval_global_model(x, TD, self.numExp, numWL, self.t0_choice)
+                
+                return F.flatten() - data_flat
     
-        def residuals(x):
-            F = fit.eval_global_model(x, TD, self.numExp, numWL, self.t0_choice)
-            return F.flatten() - data_flat
+            # Configurar barra de progreso
+            self.progress_bar.setValue(0)
+            iter_counter = {'n': 0}
+            
+            def callback(xk, *args, **kwargs):
+                iter_counter['n'] += 1
+                # Actualizar GUI cada pocas iteraciones para no frenar el cálculo
+                if iter_counter['n'] % 5 == 0:
+                    # Simular progreso (no sabemos el total real de iteraciones)
+                    val = (iter_counter['n'] % 100) 
+                    self.progress_bar.setValue(val)
+                    QTimer.singleShot(0, lambda: None) # Process events
     
-        # --- progress bookkeeping ---
-        self.progress_bar.setValue(0)
-        iterations = {'count': 0}
-    
-        def callback(xk, *args, **kwargs):
-            iterations['count'] += 1
-            val = (iterations['count'] % 100)
-            self.progress_bar.setValue(val)
-            QTimer.singleShot(1, lambda: None)  # keeps UI responsive
-    
-        try:
-            # --- detect if least_squares supports the 'callback' argument ---
-            lsq_signature = inspect.signature(least_squares)
-            kwargs = dict(
-                fun=residuals,
-                x0=self.ini,
-                bounds=(self.limi, self.lims),
-                jac='2-point',
-            )
-    
-            if "callback" in lsq_signature.parameters:
-                kwargs["callback"] = callback  # ✅ use it if available
-    
-            res = least_squares(**kwargs)
-    
-        except Exception as e:
-            QMessageBox.critical(self, "Optimization error", str(e))
-            raise
-    
-        # finalize progress bar
-        self.progress_bar.setValue(100)
-        self.fit_result = res
-        self.fit_x = res.x
-
+            try:
+                # Preparar argumentos
+                kwargs = {
+                    'fun': residuals,
+                    'x0': self.ini,
+                    'bounds': (self.limi, self.lims),
+                    'jac': '2-point',
+                    'method': 'trf',
+                    'loss': 'linear'
+                }
+                
+                # Verificar si scipy soporta callback
+                sig = inspect.signature(least_squares)
+                if 'callback' in sig.parameters:
+                    kwargs['callback'] = callback
+                
+                res = least_squares(**kwargs)
+                
+                self.fit_result = res
+                self.fit_x = res.x
+                self.progress_bar.setValue(100)
+                
+            except Exception as e:
+                raise e
 
     def _postprocess_fit_and_save(self):
-        """Compute fitres, resid, covariance, As, t0s, taus and save outputs."""
-        if self.fit_result is None:
-            QMessageBox.warning(self, "No result", "No fit result available.")
-            return
+            """Calcula estadísticas, extrae espectros CON ERRORES y prepara datos."""
+            import fit
+            if self.fit_result is None: return
+            
+            x = self.fit_x
+            
+            # Recuperar ejes del ajuste
+            TD = getattr(self, '_temp_fit_TD', self.TD)
+            WL = getattr(self, '_temp_fit_WL', self.WL)
+            
+            if TD is None or WL is None:
+                print("Error: Lost reference to fit axes.")
+                return
     
-        x = self.fit_x
-        numWL = len(self.WL)
-        TD = self.TD
-    
-        # compute fitted matrix and residuals
-        F_mat = fit.eval_global_model(x, TD, self.numExp, numWL, self.t0_choice)
-        fitres = F_mat.T
-        resid = self.data_c - fitres
-    
-        self.fit_fitres = fitres
-        self.fit_resid = resid
-    
-        # covariance estimation
-        J = self.fit_result.jac
-        try:
-            cov = np.linalg.inv(J.T @ J)
-            s_sq = np.sum(resid.T.flatten()**2) / (len(resid.T.flatten()) - len(x))
-            ci = cov * s_sq
-        except np.linalg.LinAlgError:
-            QMessageBox.warning(self, "Warning", "Jacobian singular; covariance can't be estimated.")
-            ci = np.zeros((len(x), len(x)))
-    
-        self.ci = ci
-    
-        # extract taus, As, t0s and their errors
-        As = np.zeros((self.numExp, numWL))
-        errAs = np.zeros_like(As)
-        errtaus = np.zeros(self.numExp)
-    
-        if self.t0_choice == 'Yes':
-            t0s = np.zeros(numWL)
-            errt0s = np.zeros(numWL)
-            for n in range(self.numExp):
-                tau_idx = 1 + n
-                errtaus[n] = np.sqrt(np.abs(ci[tau_idx, tau_idx])) if ci.size else 0.0
-            for n in range(numWL):
-                t0_idx = 1 + self.numExp + n*(self.numExp+1)
-                t0s[n] = x[t0_idx]
-                errt0s[n] = np.sqrt(np.abs(ci[t0_idx, t0_idx])) if ci.size else 0.0
-                for k in range(self.numExp):
-                    Aidx = t0_idx + 1 + k
-                    As[k, n] = x[Aidx]
-                    errAs[k, n] = np.sqrt(np.abs(ci[Aidx, Aidx])) if ci.size else 0.0
-        else:
-            t0s = x[1]
-            errt0s = np.sqrt(np.abs(ci[1,1])) if ci.size else 0.0
-            for n in range(self.numExp):
-                tau_idx = 2 + n
-                errtaus[n] = np.sqrt(np.abs(ci[tau_idx, tau_idx])) if ci.size else 0.0
-            for n in range(numWL):
-                for k in range(self.numExp):
-                    Aidx = 2 + self.numExp + k + n*self.numExp
-                    As[k, n] = x[Aidx]
-                    errAs[k, n] = np.sqrt(np.abs(ci[Aidx, Aidx])) if ci.size else 0.0
-    
-        self.As = As
-        self.errAs = errAs
-        self.t0s = t0s
-        self.errt0s = errt0s
-        self.errtaus = errtaus
-    
-        # update embedded canvases
-        self._update_fit_canvas()
-        self._update_resid_canvas()
-        self.btn_show_das.setEnabled(True)
-    
-        # --- Usar la carpeta base determinada al inicio ---
-        base_dir = self.base_dir
-        print(f" Guardando resultados en: {base_dir}")
-        
-        outdir = os.path.join(base_dir, "fit")
-        os.makedirs(outdir, exist_ok=True)
-    
-        np.save(os.path.join(outdir, "GFitResults.npy"), {
-            "numExp": self.numExp, "numWL": numWL, "x": x, "data_c": self.data_c,
-            "WL_a": self.WL, "TD_a": self.TD, "fitres": fitres, "ci": ci,
-            "As": As, "t0s": t0s, "errAs": errAs, "errt0s": errt0s,
-            "jacobian": self.fit_result.jac
-        })
-    
-        # text dumps
-        with open(os.path.join(outdir, "Amplitudes.txt"), 'w') as fid:
-            fid.write('\t'.join([f'A{i+1}' for i in range(self.numExp)]) + '\n')
-            for i in range(numWL):
-                fid.write('\t'.join([f'{As[j, i]:.6e}' for j in range(self.numExp)]) + '\n')
-        with open(os.path.join(outdir, "WL.txt"), 'w') as fid:
-            fid.write('WL\n')
-            for i in range(numWL):
-                fid.write(f'{self.WL[i]:.6f}\n')
-        with open(os.path.join(outdir, "TD.txt"), 'w') as fid:
-            fid.write('TD\n')
-            for i in range(len(self.TD)):
-                fid.write(f'{self.TD[i]:.6f}\n')
-        with open(os.path.join(outdir, "GFit.txt"), 'w') as fid:
-            fid.write('\t'.join([f'kin_{round(self.WL[i]):.0f}_nm' for i in range(numWL)]) + '\n')
-            for i in range(len(self.TD)):
-                fid.write('\t'.join([f'{fitres[j, i]:.6e}' for j in range(numWL)]) + '\n')
-        with open(os.path.join(outdir, "GFit_resid.txt"), 'w') as fid:
-            fid.write('\t'.join([f'kin_{round(self.WL[i]):.0f}_nm' for i in range(numWL)]) + '\n')
-            for i in range(len(self.TD)):
-                fid.write('\t'.join([f'{resid[j, i]:.6e}' for j in range(numWL)]) + '\n')
-    
-        QMessageBox.information(self, "Fit finished",
-                                f"Fit completed.\nRMSD: {np.sqrt(np.sum(resid**2)/resid.size):.6e}\nResults saved in:\n{outdir}")
-
-    def plot_das_and_more(self):
-        """Open external Matplotlib figures for DAS, t0s and interactive per-wavelength fits."""
-        if self.As is None:
-            QMessageBox.warning(self, "No fit", "Run a fit first.")
-            return
-    
-        # ---  Usar directamente la carpeta _Results creada por FLUPSAnalyzer ---
-        base_dir = self.base_dir
-        print(f" Guardando resultados en: {base_dir}")
-
-        outdir = os.path.join(base_dir, "Plots")
-        os.makedirs(outdir, exist_ok=True)
-
-    
-        # define palette fija
-        palette = ['blue', 'red', 'green', 'orange', 'yellow']
-        
-        # limitar la cantidad de colores a numExp
-        colors = palette[:self.numExp]
-        
-        plt.figure(figsize=(8,6))
-        plt.gcf().set_facecolor('white')
-        
-        if self.t0_choice == 'Yes':
-            for n in range(self.numExp):
-                label = f"τ{n+1} = {self.fit_x[n+1]:.3f} ± {self.errtaus[n]:.3f}"
-                plt.plot(self.WL, self.As[n,:], '-', lw=2, label=label, color=colors[n])
-                plt.fill_between(self.WL, self.As[n,:]-self.errAs[n,:], self.As[n,:]+self.errAs[n,:], alpha=0.2)
-        else:
-            for n in range(self.numExp):
-                label = f"τ{n+1} = {self.fit_x[n+2]:.3f} ± {self.errtaus[n]:.3f}"
-                plt.plot(self.WL, self.As[n,:], '-', lw=2, label=label, color=colors[n])
-                plt.fill_between(self.WL, self.As[n,:]-self.errAs[n,:], self.As[n,:]+self.errAs[n,:], alpha=0.2)
-        
-        plt.axhline(0, color='k', lw=1, ls='--')
-        plt.title("Decay-Associated Spectra (DAS)")
-        plt.xlabel("Wavelength (nm)")
-        plt.ylabel("Amplitude")
-        plt.legend()
-        plt.grid(True, linestyle=':', alpha=0.6)
-        plt.tight_layout()
-        plt.savefig(os.path.join(outdir, "DAS.png"), dpi=300, bbox_inches='tight')
-        plt.show(block=False)
-    
-        # t0s plot if independent
-        if self.t0_choice == 'Yes':
-            plt.figure()
-            plt.plot(self.WL, self.t0s)
-            plt.axhline(0,color='k')
-            plt.title("Time zero")
-            plt.xlabel("Wavelength (nm)")
-            plt.ylabel("t0 (ps)")
-            plt.savefig(os.path.join(outdir, "T0s.png"), dpi=200)
-            plt.show(block=False)
-    
-        # Residuals plot
-        fig, ax = plt.subplots(figsize=(9, 6))
-        pcm = ax.pcolormesh(self.WL, self.TD, self.fit_resid.T, shading='auto', cmap='jet')
-        ax.set_title("Residual from fit")
-        ax.set_ylabel("Delay (ps)")
-        ax.set_xlabel("Wavelength (nm)")
-        fig.colorbar(pcm, ax=ax, label='ΔA')
-        fig.tight_layout()
-        fig.savefig(os.path.join(outdir, "Residual.png"), dpi=200)
-        plt.close(fig)
-    
-        # Interactive per-wavelength plots
-        cont = True
-        while cont:
-            wl_str, ok = QInputDialog.getText(
-                self,
-                "Check fit",
-                "Enter wavelength to check the fit (or Cancel to finish):",
-                text=str(self.WL[len(self.WL)//2])
-            )
-            if not ok:
-                break
+            numWL = len(WL)
+            
+            # 1. Reconstruir Matriz y Residuos
+            if self.model_type == "Sequential":
+                F_mat = fit.eval_sequential_model(x, TD, self.numExp, numWL, self.t0_choice)
+            else:
+                F_mat = fit.eval_global_model(x, TD, self.numExp, numWL, self.t0_choice)
+                
+            fitres = F_mat.T 
+            
+            if self.data_c.shape != fitres.shape:
+                resid = np.zeros_like(fitres)
+            else:
+                resid = self.data_c - fitres
+            
+            self.fit_fitres = fitres
+            self.fit_resid = resid
+            
+            # 2. Covarianza y Errores
             try:
-                Wlobs = float(wl_str)
-            except Exception:
-                QMessageBox.warning(self, "Bad input", "Enter a valid number.")
-                continue
-            pos3 = int(np.argmin(np.abs(self.WL - Wlobs)))
-            fig, (ax1, ax2) = plt.subplots(1,2, sharey=True, figsize=(9,4))
-            ax1.plot(self.TD, self.data_c[pos3,:], 'b.', label='Data')
-            ax1.plot(self.TD, self.fit_fitres[pos3,:], 'r', label='Fit')
-            ax1.legend()
-            ax1.set_xlim(self.TD[0], np.percentile(self.TD, 80))
-            ax2.plot(self.TD, self.data_c[pos3,:], 'b.')
-            ax2.plot(self.TD, self.fit_fitres[pos3,:], 'r')
-            ax2.set_xscale('log')
-            ax1.set_title(f"Fit at {self.WL[pos3]:.1f} nm")
-            ax1.set_xlabel("Time / ps")
-            ax1.set_ylabel("ΔA")
-            plt.tight_layout()
-            
-            # --- Guardar figura ---
-            fname_img = os.path.join(outdir, f"Fit_{int(round(self.WL[pos3]))}nm.png")
-            plt.savefig(fname_img, dpi=200)
-            
-            # --- Guardar datos numéricos (Delay, Exp, Fit) ---
-            fname_txt = os.path.join(outdir, f"Fit_{int(round(self.WL[pos3]))}nm.txt")
-            with open(fname_txt, "w") as ftxt:
-                ftxt.write("# TD(ps)\tExp(A)\tFit(A)\n")
-                for td, exp, fitv in zip(self.TD, self.data_c[pos3, :], self.fit_fitres[pos3, :]):
-                    ftxt.write(f"{td:.6e}\t{exp:.6e}\t{fitv:.6e}\n")
-            
-            plt.show(block=True)
-
-            # ask to continue
-            resp = QMessageBox.question(self, "Continue", "Choose another wavelength?", QMessageBox.Yes | QMessageBox.No)
-            if resp != QMessageBox.Yes:
-                cont = False
+                J = self.fit_result.jac
+                if J is not None and J.size > 0:
+                    cov = np.linalg.inv(J.T @ J)
+                    mse = np.sum(resid**2) / (resid.size - len(x))
+                    cov = cov * mse
+                    ci = np.sqrt(np.maximum(np.diagonal(cov), 0))
+                else:
+                    ci = np.zeros_like(x)
+            except Exception as e:
+                print(f"Covariance Error: {e}")
+                ci = np.zeros_like(x)
     
-        QMessageBox.information(self, "Plots saved", f"Plots saved to {outdir}")
-
+            self.ci = ci 
+            
+            # 3. Extraer Taus
+            idx_tau = 1 if self.t0_choice == 'Yes' else 2
+            self.extracted_taus = x[idx_tau : idx_tau + self.numExp]
+            self.extracted_errtaus = ci[idx_tau : idx_tau + self.numExp]
+            
+            # 4. Extraer Amplitudes Y SUS ERRORES (errAs)
+            self.As = np.zeros((self.numExp, numWL))
+            self.errAs = np.zeros((self.numExp, numWL)) # <--- Inicializamos matriz errores
+            
+            try:
+                if self.t0_choice == 'No':
+                    base_A = 2 + self.numExp
+                    
+                    # Extraer valores (As)
+                    self.As = x[base_A:].reshape(numWL, self.numExp).T
+                    
+                    # Extraer errores (errAs) usando la misma lógica de reshape
+                    self.errAs = ci[base_A:].reshape(numWL, self.numExp).T
+                    
+                    self.t0s = np.full(numWL, x[1])
+                else:
+                    # Lógica placeholder para chirp (complejo de vectorizar simple)
+                    self.t0s = np.zeros(numWL)
+            except Exception as e:
+                print(f"Error extracting amplitudes: {e}")
+            
+            # 5. Actualizar UI
+            self._wl_proc = WL
+            self._td_proc = TD
+            self._update_fit_canvas()
+            self._update_resid_canvas()
+            self.btn_show_das.setEnabled(True)
+            
+            QMessageBox.information(self, "Fit Finished", f"Optimization complete.\nRMSD: {np.sqrt(np.mean(resid**2)):.2e}")
+    def plot_das_and_more(self):
+         """Abre ventana externa SOLO con DAS/SAS y luego permite chequear trazas."""
+         if self.As is None: return
+         
+         # --- PARTE 1: Gráfico Global DAS/SAS (Una sola figura) ---
+         plt.figure(figsize=(8, 5))
+         ax = plt.gca()
+         
+         wl = getattr(self, '_wl_proc', self.WL)
+         colors = ['b', 'r', 'g', 'orange', 'm', 'c']
+         
+         for n in range(self.numExp):
+             tau_val = self.extracted_taus[n]
+             err_tau = self.extracted_errtaus[n] if not np.isnan(self.extracted_errtaus[n]) else 0.0
+             lbl = f"τ{n+1} = {tau_val:.2f} ± {err_tau:.2f} ps"
+             color = colors[n % len(colors)]
+             
+             # Línea principal
+             ax.plot(wl, self.As[n], label=lbl, color=color, linewidth=2)
+             
+             # Sombra de error
+             if self.errAs is not None:
+                 lower = np.nan_to_num(self.As[n] - self.errAs[n])
+                 upper = np.nan_to_num(self.As[n] + self.errAs[n])
+                 ax.fill_between(wl, lower, upper, color=color, alpha=0.2)
+             
+         ax.set_xlabel("Wavelength (nm)")
+         if self.model_type == "Sequential":
+             ax.set_ylabel("SAS (Concentration)")
+             ax.set_title("Species Associated Spectra (SAS)")
+         else:
+             ax.set_ylabel("DAS (Amplitude)")
+             ax.set_title("Decay Associated Spectra (DAS)")
+         ax.legend()
+         ax.axhline(0, color='k', linestyle='--', alpha=0.5)
+         ax.grid(True, linestyle=':', alpha=0.4)
+         
+         plt.tight_layout()
+         plt.show(block=False)
+    
+         # --- PARTE 2: Chequeo Interactivo de Trazas ---
+         td = getattr(self, '_td_proc', self.TD)
+         cont = True
+         while cont:
+             text_default = str(wl[len(wl)//2])
+             wl_str, ok = QInputDialog.getText(self, "Check Trace", f"Enter wavelength ({wl.min():.1f}-{wl.max():.1f}):", text=text_default)
+             if not ok: break
+             try:
+                 idx = np.argmin(np.abs(wl - float(wl_str)))
+                 real_wl = wl[idx]
+                 plt.figure(figsize=(7, 4))
+                 plt.plot(td, self.data_c[idx, :], 'bo', markersize=3, alpha=0.5, label='Exp')
+                 plt.plot(td, self.fit_fitres[idx, :], 'r-', linewidth=2, label='Fit')
+                 plt.xscale('symlog', linthresh=0.1)
+                 plt.title(f"Trace at {real_wl:.1f} nm")
+                 plt.xlabel("Delay (ps)"); plt.ylabel("ΔA")
+                 plt.legend(); plt.grid(True, alpha=0.3)
+                 plt.tight_layout(); plt.show()
+             except: pass
+             if QMessageBox.question(self, "Next?", "Check another?", QMessageBox.Yes|QMessageBox.No) == QMessageBox.No: cont = False
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

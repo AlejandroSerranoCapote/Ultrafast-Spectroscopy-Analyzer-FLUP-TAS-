@@ -22,9 +22,7 @@ def read_csv_file(path):
             continue
     TD = np.array(TD)
     data = df.loc[valid_rows, valid_cols].apply(pd.to_numeric, errors='coerce').fillna(0).to_numpy()
-    # Restar background simple (usa primeros 20 delays o todos si menos)
-    # nbac = 20 if data.shape[1] > 20 else data.shape[1]
-    # data = data - np.mean(data[:, :nbac], axis=1, keepdims=True)
+
     return WL, TD, data
 
 
@@ -79,10 +77,6 @@ def load_from_paths(data_path, wl_path, td_path):
             data_arr[:r, :c] = data[:r, :c]
             print(f"Warning: data shape {data.shape} no coincide con (n_wl, n_td); se rellenó/truncó a {(nwl, ntd)}.")
     
-    # ---- Restar background simple ----
-    # nbac = 20 if data_arr.shape[1] > 20 else data_arr.shape[1]
-    # data_arr = data_arr - np.mean(data_arr[:, :nbac], axis=1, keepdims=True)
-    
     return data_arr, wl, td
 
 def load_data(auto_path=None, data_path=None, wl_path=None, td_path=None):
@@ -107,9 +101,13 @@ def load_data(auto_path=None, data_path=None, wl_path=None, td_path=None):
 
     raise ValueError("No se proporcionaron archivos válidos o no se pudieron leer.")
 
+
 # ---------------------------------------------------------------------
 # Modelos y funciones de corrección
 # ---------------------------------------------------------------------
+def eV_a_nm(E_eV):
+    E_eV_safe = np.where(E_eV == 0,1 , E_eV)
+    return 1239.841984 / E_eV_safe
 def t0_model(w, a, b, c, d):
     """
     Modelo no lineal propuesto:
