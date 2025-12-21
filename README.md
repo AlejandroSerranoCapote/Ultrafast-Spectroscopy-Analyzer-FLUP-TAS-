@@ -1,4 +1,4 @@
-# Ultrafast Spectroscopy Analyzer ⚡🔬
+# Ultrafast Spectroscopy Analyzer 
 
 **Ultrafast Spectroscopy Analyzer** es un software gratuito y de código abierto diseñado para el procesamiento y análisis de datos de espectroscopía ultrarrápida.  
 Permite trabajar con dos técnicas experimentales complementarias:
@@ -12,7 +12,7 @@ Además, permite realizar análisis globales ajustando los datos a un modelo mul
 \Delta A(t, \lambda) = \sum_{i=1}^{n} A_i(\lambda) e^{-t/\tau_i}
 ```
 ---
-> 🧩 **Instala las dependencias necesarias con el siguiente comando (dentro de la carpeta donde está el script):**
+>  **Instala las dependencias necesarias con el siguiente comando (dentro de la carpeta donde está el script):**
 > ```bash
 > pip install -r requirements.txt
 > ```
@@ -21,23 +21,23 @@ Además, permite realizar análisis globales ajustando los datos a un modelo mul
 > python "Ultrafast Spectroscopy Analyzer.py"
 > ```
 > 
-> 🧩 **Crear un .exe del script (Ejecutar en el cmd dentro de la carpeta donde está el script)**:
+>  **Crear un .exe del script (Ejecutar en el cmd dentro de la carpeta donde está el script)**:
 > ```bash
 > pyinstaller --onefile --noconsole --icon=icon.ico --exclude-module PyQt6 "Ultrafast Spectroscopy Analyzer.py"
 > ```
 
 ---
-## ✨ Características principales
+##  Características principales
 
-✅ Interfaz gráfica intuitiva basada en **PyQt5**  
-✅ Visualización dinámica del mapa ΔA(λ, t)  
-✅ Selección interactiva de puntos *t₀* sobre el mapa  
-✅ Ajuste de *t₀* mediante modelos **polinómicos** o **no lineales**  
-✅ Corrección automática del solvente (modo TAS)  
-✅ Eliminación del *pump fringe* o dispersión del láser de bombeo  
-✅ Visualización simultánea de **cinéticas y espectros** bajo el cursor  
-✅ Ajuste global multiexponencial con generación de **DAS**  
-✅ Exportación automática y estructurada de todos los resultados corregidos  
+ Interfaz gráfica intuitiva basada en **PyQt5**  
+ Visualización dinámica del mapa ΔA(λ, t)  
+ Selección interactiva de puntos *t₀* sobre el mapa  
+ Ajuste de *t₀* mediante modelos **polinómicos** o **no lineales**  
+ Corrección automática del solvente (modo TAS)  
+ Eliminación del *pump fringe* o dispersión del láser de bombeo  
+ Visualización simultánea de **cinéticas y espectros** bajo el cursor  
+ Ajuste global multiexponencial con generación de **DAS**  
+ Exportación automática y estructurada de todos los resultados corregidos  
 
 ---
 
