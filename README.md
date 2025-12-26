@@ -1,16 +1,41 @@
 # Ultrafast Spectroscopy Analyzer 
 
 **Ultrafast Spectroscopy Analyzer** es un software gratuito y de código abierto diseñado para el procesamiento y análisis de datos de espectroscopía ultrarrápida.  
-Permite trabajar con dos técnicas experimentales complementarias:
+Permite trabajar con dos técnicas experimentales:
 
 - **FLUPS** — *Fluorescence Up-Conversion Spectroscopy*  
 - **TAS** — *Transient Absorption Spectroscopy*
 
 La aplicación integra un entorno gráfico interactivo que facilita la corrección del chirp temporal (*t₀*), la sustracción del solvente, la eliminación del *pump scattering* y la visualización en tiempo real del mapa espectro-temporal.  
-Además, permite realizar análisis globales ajustando los datos a un modelo multiexponencial, obteniendo los **DAS (Decay-Associated Spectra)** correspondientes a cada componente cinética.
-```math
-\Delta A(t, \lambda) = \sum_{i=1}^{n} A_i(\lambda) e^{-t/\tau_i}
-```
+
+##  Modelos Matemáticos
+
+El software ajusta la señal experimental $\Delta A(t, \lambda)$ utilizando dos aproximaciones principales, ambas convolucionadas con la Función de Respuesta del Instrumento (IRF).
+
+### 1. Modelo Paralelo: Decay-Associated Spectra (DAS)
+Asume que los componentes decaen de forma independiente, ideal para mezclas de especies no acopladas.
+
+$$\Delta A(t, \lambda) = IRF(t) \otimes \sum_{i=1}^{n} A_i(\lambda) e^{-t/\tau_i}$$
+
+Donde cada $A_i(\lambda)$ representa el **DAS** de la componente con tiempo de vida $\tau_i$.
+
+### 2. Modelo Secuencial: Species-Associated Spectra (SAS)
+Describe una cascada de energía o reacción consecutiva: $1 \xrightarrow{k_1} 2 \xrightarrow{k_2} \dots \xrightarrow{k_n} n$.  
+Las poblaciones de cada especie se rigen por las **Ecuaciones de Bateman**.
+
+Para una cadena de decaimiento donde $k_i = 1/\tau_i$, la concentración $C_n(t)$ de la especie $n$ se define como:
+
+$$C_n(t) = \left( \prod_{j=1}^{n-1} k_j \right) \sum_{j=1}^{n} \frac{e^{-k_j t}}{\prod_{p=1, p \neq j}^{n} (k_p - k_j)}$$
+
+La señal total es la suma de las contribuciones de cada estado excitado (SAS):
+
+$$\Delta A(t, \lambda) = IRF(t) \otimes \sum_{i=1}^{n} SAS_i(\lambda) C_i(t)$$
+
+###  Función de Respuesta del Instrumento (IRF)
+La resolución temporal se modela mediante una Gaussiana de ancho $w$ (FWHM) centrada en $t_0$:
+
+$$IRF(t) = \frac{1}{w \sqrt{\pi}} \exp\left( -\left( \frac{t - t_0}{w} \right)^2 \right)$$
+
 ---
 >  **Instala las dependencias necesarias con el siguiente comando (dentro de la carpeta donde está el script):**
 > ```bash
@@ -41,9 +66,9 @@ Además, permite realizar análisis globales ajustando los datos a un modelo mul
 
 ---
 
-> 📘 Consulta también: [Formatos de datos admitidos →](./Data_format.md)
+>  Consulta también: [Formatos de datos admitidos →](./Data_format.md)
 
-## 🖥️ Capturas de pantalla
+##  Capturas de pantalla
 
 > *GUI FLUPS*
 <img width="1394" height="932" alt="Foto1" src="https://github.com/user-attachments/assets/ab6397c5-5751-4c59-858c-83ba9da74b67" />
