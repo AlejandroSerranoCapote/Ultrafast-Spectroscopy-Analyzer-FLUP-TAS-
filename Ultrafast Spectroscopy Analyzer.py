@@ -35,6 +35,8 @@ import fit
 from core_analysis import fit_t0, load_data,eV_a_nm
 from PyQt5.QtWidgets import QLineEdit, QLabel, QHBoxLayout
 import time
+from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
 from matplotlib.colors import BoundaryNorm
 
 class MainApp(QMainWindow):
@@ -46,7 +48,6 @@ class MainApp(QMainWindow):
         self.setWindowTitle("Data Analyzer Selector")
         self.setMinimumSize(500, 300)
 
-        # --- Paleta de colores (coherente con FLUPS/TAS) ---
         palette = self.palette()
         palette.setColor(QPalette.Window, QColor("#1e1e1e"))
         palette.setColor(QPalette.WindowText, QColor("#f0f0f0"))
@@ -67,8 +68,9 @@ class MainApp(QMainWindow):
         # --- Botones estilizados ---
         btn_flups = QPushButton("FLUPS Analyzer")
         btn_tas = QPushButton("TAS Analyzer")
+        btn_global_fit = QPushButton("Global fit")
         
-        for btn in [btn_flups, btn_tas]:
+        for btn in [btn_flups, btn_tas,btn_global_fit]:
             btn.setFont(QFont("Segoe UI", 12))
             btn.setFixedHeight(45)
             btn.setCursor(Qt.PointingHandCursor)
@@ -94,7 +96,8 @@ class MainApp(QMainWindow):
         # --- Conexiones ---
         btn_flups.clicked.connect(self.launch_flups)
         btn_tas.clicked.connect(self.launch_tas)
-
+        btn_global_fit.clicked.connect(self.launch_global)
+        
         self.setCentralWidget(central_widget)
         # --- Descripción informativa ---
         description = QLabel(
@@ -113,6 +116,7 @@ class MainApp(QMainWindow):
             margin-top: 25px;
         """)
         layout.addWidget(description)
+        
     # --- Lanzar FLUPS ---
     def launch_flups(self):
         self.analyzer = FLUPSAnalyzer()
@@ -125,7 +129,12 @@ class MainApp(QMainWindow):
         self.analyzer.show()
         self.close()
 
-
+    #Lanzar el global fit
+    def launch_global(self):
+        self.analyzer = GlobalFitPanel()
+        self.analyzer.show()
+        self.close()
+        
 class FLUPSAnalyzer(QMainWindow):
 
     def __init__(self):
@@ -1700,6 +1709,61 @@ class TASAnalyzer(FLUPSAnalyzer):
             val = self.data[idx_wl, idx_td]
             self.label_status.setText(f"Cursor: {x:.1f} nm, {y:.2f} ps | ΔA: {val:.4e}")
 
+
+class Surface3DWindow(QDialog):
+    """Ventana independiente para visualizar el 3D sin bloquear el panel principal."""
+    def __init__(self, xs, ys, zs, scale='linear', parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("3D Surface Preview")
+        self.resize(800, 600)
+        
+        # Quitar el bloqueo modal para que deje tocar el panel de atrás
+        self.setWindowModality(Qt.NonModal)
+
+        layout = QVBoxLayout()
+        
+        # Crear el Canvas de Matplotlib
+        self.fig = plt.Figure()
+        self.canvas = FigureCanvas(self.fig)
+        self.toolbar = NavigationToolbar(self.canvas, self)
+        
+        layout.addWidget(self.toolbar)
+        layout.addWidget(self.canvas)
+        self.setLayout(layout)
+
+        # Dibujar el gráfico
+        self.plot_data(xs, ys, zs, scale)
+
+    def plot_data(self, xs, ys, zs, scale):
+        ax = self.fig.add_subplot(111, projection='3d')
+        X, Y = np.meshgrid(xs, ys)
+        Z = zs.T
+        
+        surf = ax.plot_surface(X, Y, Z, cmap='jet',edgecolor='none', antialiased=True)
+        n_ticks = 6
+        xticks = np.linspace(xs.min(), xs.max(), n_ticks)
+
+        # ax.set_zticks(zticks)
+        # ax.set_xlabel("Wavelength (nm)")
+        ax.set_xlabel("Energy (eV)")
+        
+        ax.set_ylabel("Delay (ps)")
+        ax.set_zlabel("Transient absorption / -")
+        ax.grid(False)
+        ax.xaxis._axinfo["grid"]["linewidth"] = 0
+        ax.yaxis._axinfo["grid"]["linewidth"] = 0
+        ax.zaxis._axinfo["grid"]["linewidth"] = 0
+        ax.xaxis.pane.fill = False
+        ax.yaxis.pane.fill = False
+        ax.zaxis.pane.fill = False
+        ax.view_init(elev=25, azim=75)
+        
+        if scale == 'symlog':
+            ax.set_yscale('symlog', linthresh=1.0)
+            
+        self.fig.colorbar(surf, ax=ax, shrink=0.5, aspect=10)
+        self.canvas.draw()
+        
 class GlobalFitPanel(QDialog):
     def __init__(self, parent=None):
             super().__init__(parent)
@@ -1726,10 +1790,10 @@ class GlobalFitPanel(QDialog):
                 self.base_dir = os.getcwd()
     
             # --- 2. Variables del Ajuste ---
-            self.numExp = 3
+            self.numExp = 2
             self.model_type = 'Parallel' 
             self.t0_choice = 'No'
-            self.tech = 'FLUPS'
+            self.tech = 'TAS'
             self.yscale = 'linear'
             
             # Placeholders para resultados
@@ -1855,6 +1919,10 @@ class GlobalFitPanel(QDialog):
         gb_vis = QGroupBox("4. Visualization")
         form_vis = QFormLayout()
         
+        self.btn_plot_3d = QPushButton("Ver Mapa en 3D")
+        self.btn_plot_3d.clicked.connect(self.plot_3d_surface) # Conectamos a la nueva función
+        form_vis.addRow(self.btn_plot_3d)
+        
         self.combo_scale = QComboBox()
         self.combo_scale.addItems(["Linear", "SymLog"])
         self.combo_scale.currentTextChanged.connect(self._on_scale_changed) # Conectamos función
@@ -1865,7 +1933,7 @@ class GlobalFitPanel(QDialog):
         # Num Exponenciales
         self.spin_numExp = QSpinBox()
         self.spin_numExp.setRange(1, 6)
-        self.spin_numExp.setValue(3)
+        self.spin_numExp.setValue(2)
         form_model.addRow("Exponentials:", self.spin_numExp)
 
         # Tipo de Modelo
@@ -2027,6 +2095,21 @@ class GlobalFitPanel(QDialog):
             self.progress_bar.setValue(0)
             self.progress_bar.setTextVisible(True)
             l.addWidget(self.progress_bar)
+    def plot_3d_surface(self):
+        """Lanza la ventana 3D independiente (No Modal)."""
+        if self.data_c is None:
+            QMessageBox.warning(self, "Sin datos", "Aplica 'Preview' antes de ver el 3D.")
+            return
+    
+        # Obtener datos actuales
+        xs = getattr(self, '_wl_proc', self.WL)
+        ys = getattr(self, '_td_proc', self.TD)
+        zs = self.data_c
+        scale = getattr(self, 'yscale', 'linear')
+    
+        # Crear y mostrar la ventana (guardando referencia en self)
+        self.pop_3d = Surface3DWindow(xs, ys, zs, scale, parent=self)
+        self.pop_3d.show() # .show() no bloquea la ejecución    
     def _generate_defaults(self):
             """Genera los valores iniciales (Guesses) basados en la configuración actual."""
             # 1. Leer configuración actual
@@ -2180,7 +2263,6 @@ class GlobalFitPanel(QDialog):
         if self.parent_app is None: return
         
         # Reutilizamos tu lógica original de detección
-        # (Asegúrate de que estas variables existen en tu parent_app)
         if hasattr(self.parent_app, "data_corrected") and self.parent_app.data_corrected is not None:
             self.data_raw = np.array(self.parent_app.data_corrected, copy=True)
             self.WL = getattr(self.parent_app, "WL", None)
@@ -2199,8 +2281,6 @@ class GlobalFitPanel(QDialog):
     def load_data(self):
         """Cargar desde .npy usando tu módulo 'fit'."""
         try:
-            # Asumo que importaste fit al principio del archivo
-            import fit 
             raw_data, TD, WL, base_dir = fit.load_npy(self)
             
             self.data_raw = raw_data.copy()
@@ -2317,7 +2397,7 @@ class GlobalFitPanel(QDialog):
                                                       vmin=vmin, vmax=vmax)
                 
                 self.ax_exp.set_title(Title)
-                self.ax_exp.set_xlabel("Wavelength (nm)")
+                self.ax_exp.set_xlabel("Energy (eV)")
                 self.ax_exp.set_ylabel("Delay (ps)")
                 
                 # --- APLICAR ESCALA Y (CONDICIONAL) ---
@@ -2328,7 +2408,7 @@ class GlobalFitPanel(QDialog):
                 
                 divider = make_axes_locatable(self.ax_exp)
                 cax = divider.append_axes("right", size="5%", pad=0.05)
-                self.cbar_exp = self.canvas_exp.figure.colorbar(self.pcm_exp, cax=cax, label='ΔA')
+                self.cbar_exp = self.canvas_exp.figure.colorbar(self.pcm_exp, cax=cax, label='Transient absorption / -')
                 
                 self.canvas_exp.draw_idle()
                 
@@ -2359,7 +2439,7 @@ class GlobalFitPanel(QDialog):
                                                       vmin=vmin, vmax=vmax)
                 
                 self.ax_fit.set_title("Fit Reconstructed")
-                self.ax_fit.set_xlabel("Wavelength (nm)")
+                self.ax_fit.set_xlabel("Energy (eV)")
                 self.ax_fit.set_ylabel("Delay (ps)")
                 
                 # --- APLICAR ESCALA Y (CONDICIONAL) ---
@@ -2370,7 +2450,7 @@ class GlobalFitPanel(QDialog):
                 
                 divider = make_axes_locatable(self.ax_fit)
                 cax = divider.append_axes("right", size="5%", pad=0.05)
-                self.cbar_fit = self.canvas_fit.figure.colorbar(self.pcm_fit, cax=cax, label='ΔA')
+                self.cbar_fit = self.canvas_fit.figure.colorbar(self.pcm_fit, cax=cax, label='Transient absorption / -')
                 self.canvas_fit.draw()
             except Exception as e:
                 print(f"Error painting Fit: {e}")
@@ -2400,7 +2480,7 @@ class GlobalFitPanel(QDialog):
                                                           vmin=vmin, vmax=vmax)
                 
                 self.ax_resid.set_title("Residuals")
-                self.ax_resid.set_xlabel("Wavelength (nm)")
+                self.ax_resid.set_xlabel("Energy (eV)")
                 self.ax_resid.set_ylabel("Delay (ps)")
                 
                 # --- APLICAR ESCALA Y (CONDICIONAL) ---
@@ -2485,15 +2565,28 @@ class GlobalFitPanel(QDialog):
             dlg.resize(700, 500)
             v = QVBoxLayout()
             
-            table = QTableWidget(L, 4)
-            table.setHorizontalHeaderLabels(["Parameter", "Value", "Lower Bound", "Upper Bound"])
-            table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+
             
+            table = QTableWidget(L, 5) # Cambiamos a 5 columnas
+            table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+            table.setHorizontalHeaderLabels(["Parameter", "Value", "Lower Bound", "Upper Bound", "Fix?"])
+            
+            # Si no existe la variable de fijos, la creamos (False por defecto)
+            if not hasattr(self, 'is_fixed'):
+                self.is_fixed = np.zeros(L, dtype=bool)
+            elif len(self.is_fixed) != L: # Si cambió el modelo, resetear
+                self.is_fixed = np.zeros(L, dtype=bool)
+                
             # --- BUCLE DE LLENADO CON ETIQUETAS ---
             for i in range(L):
                 
                 # A) Generar descripción inteligente
                 label = str(i)
+                # Columna 4: Checkbox para fijar
+                chk_item = QTableWidgetItem()
+                chk_item.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
+                chk_item.setCheckState(Qt.Checked if self.is_fixed[i] else Qt.Unchecked)
+                table.setItem(i, 4, chk_item)
                 
                 if not is_chirp:
                     # Modelo Estándar
@@ -2554,212 +2647,372 @@ class GlobalFitPanel(QDialog):
                         self.ini[i] = float(table.item(i, 1).text())
                         self.limi[i] = float(table.item(i, 2).text())
                         self.lims[i] = float(table.item(i, 3).text())
+                        # Guardar estado de "fijado"
+                        self.is_fixed[i] = (table.item(i, 4).checkState() == Qt.Checked)
                 except ValueError:
                     QMessageBox.warning(self, "Error", "Invalid number format.")
         
+
     def _run_least_squares_with_progress(self):
-            """Ejecuta scipy.least_squares conectando una barra de progreso."""
-            import inspect
-            import fit  # Asegúrate de importar tu modulo fit
-            
-            # Usamos los datos procesados temporalmente
-            TD = self._temp_fit_TD
-            WL = self._temp_fit_WL
-            numWL = len(WL)
-            data_flat = self.data_c.T.flatten() # Flatten [WL, TD].T -> [TD, WL] flat
-            
-            # Función de residuos (Closure)
-            def residuals(x):
-                # Selección de modelo
-                if self.model_type == "Sequential":
-                    F = fit.eval_sequential_model(x, TD, self.numExp, numWL, self.t0_choice)
-                else:
-                    F = fit.eval_global_model(x, TD, self.numExp, numWL, self.t0_choice)
-                
-                return F.flatten() - data_flat
+        
+        TD = self._temp_fit_TD
+        WL = self._temp_fit_WL
+        numWL = len(WL)
+        data_flat = self.data_c.T.flatten()
     
-            # Configurar barra de progreso
+        if not hasattr(self, 'is_fixed') or len(self.is_fixed) != len(self.ini):
+            self.is_fixed = np.zeros(len(self.ini), dtype=bool)
+            
+        free_indices = np.where(~self.is_fixed)[0]
+        x0_free = self.ini[free_indices]
+        low_free = self.limi[free_indices]
+        upp_free = self.lims[free_indices]
+    
+        # --- LÓGICA DE PROGRESO ---
+        self.progress_bar.setValue(0)
+        self.progress_bar.setFormat("Iterating: %v") # Muestra el número de iteración
+        self.iter_count = 0 
+    
+        def residuals(p_free):
+            # 1. Incrementar contador cada vez que se evalúa el modelo
+            self.iter_count += 1
+            
+            # 2. Actualizar la barra cada N evaluaciones para no ralentizar demasiado
+            if self.iter_count % 10 == 0:
+                # Como no sabemos el total, hacemos que la barra "baile" (modo indefinido)
+                # o simplemente mostramos el conteo de iteraciones
+                val = (self.iter_count // 10) % 101
+                self.progress_bar.setValue(val)
+                
+                # ¡ESTO ES LO MÁS IMPORTANTE! 
+                # Fuerza a la interfaz a procesar los cambios de diseño y botones
+                QApplication.processEvents()
+    
+            # Reconstrucción del modelo (tu lógica original)
+            x_full = self.ini.copy()
+            x_full[free_indices] = p_free
+            
+            if self.model_type == "Sequential":
+                F = fit.eval_sequential_model(x_full, TD, self.numExp, numWL, self.t0_choice)
+            else:
+                F = fit.eval_global_model(x_full, TD, self.numExp, numWL, self.t0_choice)
+            
+            return F.flatten() - data_flat
+    
+        try:
+            res = least_squares(
+                fun=residuals,
+                x0=x0_free,
+                bounds=(low_free, upp_free),
+                method='trf',
+                verbose=0
+            )
+            
+            self.fit_result = res
+            self.fit_x = self.ini.copy()
+            self.fit_x[free_indices] = res.x
+            
+            # Al terminar, ponemos la barra al 100%
+            self.progress_bar.setValue(100)
+            self.progress_bar.setFormat("Fit Completed")
+            
+        except Exception as e:
             self.progress_bar.setValue(0)
-            iter_counter = {'n': 0}
-            
-            def callback(xk, *args, **kwargs):
-                iter_counter['n'] += 1
-                # Actualizar GUI cada pocas iteraciones para no frenar el cálculo
-                if iter_counter['n'] % 5 == 0:
-                    # Simular progreso (no sabemos el total real de iteraciones)
-                    val = (iter_counter['n'] % 100) 
-                    self.progress_bar.setValue(val)
-                    QTimer.singleShot(0, lambda: None) # Process events
-    
-            try:
-                # Preparar argumentos
-                kwargs = {
-                    'fun': residuals,
-                    'x0': self.ini,
-                    'bounds': (self.limi, self.lims),
-                    'jac': '2-point',
-                    'method': 'trf',
-                    'loss': 'linear'
-                }
-                
-                # Verificar si scipy soporta callback
-                sig = inspect.signature(least_squares)
-                if 'callback' in sig.parameters:
-                    kwargs['callback'] = callback
-                
-                res = least_squares(**kwargs)
-                
-                self.fit_result = res
-                self.fit_x = res.x
-                self.progress_bar.setValue(100)
-                
-            except Exception as e:
-                raise e
+            raise e
 
     def _postprocess_fit_and_save(self):
-            """Calcula estadísticas, extrae espectros CON ERRORES y prepara datos."""
-            import fit
-            if self.fit_result is None: return
-            
-            x = self.fit_x
-            
-            # Recuperar ejes del ajuste
-            TD = getattr(self, '_temp_fit_TD', self.TD)
-            WL = getattr(self, '_temp_fit_WL', self.WL)
-            
-            if TD is None or WL is None:
-                print("Error: Lost reference to fit axes.")
-                return
+        """Calcula estadísticas, extrae espectros con errores y guarda archivos en /fit/."""
+        import fit
+        import os
+        import numpy as np
+        from PyQt5.QtWidgets import QMessageBox
     
-            numWL = len(WL)
+        if self.fit_result is None:
+            return
+    
+        x = self.fit_x
+        # Recuperar ejes procesados (los que realmente se usaron en el ajuste)
+        TD = getattr(self, '_temp_fit_TD', self.TD)
+        WL = getattr(self, '_temp_fit_WL', self.WL)
+        
+        if TD is None or WL is None:
+            print("Error: No se encontraron los ejes (TD/WL) del ajuste.")
+            return
+    
+        numWL = len(WL)
+        numExp = self.numExp
+    
+        # --- 1. Reconstruir Matriz de Ajuste y Residuos ---
+        if self.model_type == "Sequential":
+            F_mat = fit.eval_sequential_model(x, TD, numExp, numWL, self.t0_choice)
+        else:
+            F_mat = fit.eval_global_model(x, TD, numExp, numWL, self.t0_choice)
             
-            # 1. Reconstruir Matriz y Residuos
-            if self.model_type == "Sequential":
-                F_mat = fit.eval_sequential_model(x, TD, self.numExp, numWL, self.t0_choice)
-            else:
-                F_mat = fit.eval_global_model(x, TD, self.numExp, numWL, self.t0_choice)
+        # F_mat suele salir como (numTD, numWL) o viceversa dependiendo de tu módulo fit.
+        # Asumimos que queremos fitres como (numWL, numTD) para que coincida con data_c
+        fitres = F_mat.T 
+        resid = self.data_c - fitres
+        
+        self.fit_fitres = fitres
+        self.fit_resid = resid
+    
+        # --- 2. Cálculo de Errores (CI) considerando parámetros FIJOS ---
+        L_total = len(x)
+        self.ci = np.zeros(L_total) # Por defecto, error 0 para todos (incluyendo fijos)
+        
+        try:
+            # Identificar índices que NO están fijos
+            if not hasattr(self, 'is_fixed'):
+                self.is_fixed = np.zeros(L_total, dtype=bool)
+            
+            free_indices = np.where(~self.is_fixed)[0]
+            J = self.fit_result.jac # El jacobiano de least_squares solo contiene columnas libres
+            
+            if J is not None and J.size > 0:
+                # Matriz de covarianza reducida
+                cov_free = np.linalg.inv(J.T @ J)
+                # Grados de libertad = Total puntos datos - Total parámetros libres
+                dof = resid.size - len(free_indices)
+                mse = np.sum(resid**2) / dof
+                err_free = np.sqrt(np.maximum(np.diagonal(cov_free * mse), 0))
                 
-            fitres = F_mat.T 
-            
-            if self.data_c.shape != fitres.shape:
-                resid = np.zeros_like(fitres)
+                # Mapear errores calculados a sus posiciones en el vector global
+                self.ci[free_indices] = err_free
+                
+        except Exception as e:
+            print(f"Advertencia en Covarianza: {e}. Los errores podrían ser 0.")
+    
+        # --- 3. Extraer Taus y sus Errores ---
+        idx_tau = 1 if self.t0_choice == 'Yes' else 2
+        self.extracted_taus = x[idx_tau : idx_tau + numExp]
+        self.extracted_errtaus = self.ci[idx_tau : idx_tau + numExp]
+    
+        # --- 4. Extraer Amplitudes y sus Errores (DAS/SAS) ---
+        self.As = np.zeros((numExp, numWL))
+        self.errAs = np.zeros((numExp, numWL))
+        
+        try:
+            if self.t0_choice == 'No':
+                base_A = 2 + numExp
+                # Reshape: de vector plano a matriz (numWL, numExp) y transponemos a (numExp, numWL)
+                self.As = x[base_A:].reshape(numWL, numExp).T
+                self.errAs = self.ci[base_A:].reshape(numWL, numExp).T
+                self.t0s = np.full(numWL, x[1])
             else:
-                resid = self.data_c - fitres
-            
-            self.fit_fitres = fitres
-            self.fit_resid = resid
-            
-            # 2. Covarianza y Errores
-            try:
-                J = self.fit_result.jac
-                if J is not None and J.size > 0:
-                    cov = np.linalg.inv(J.T @ J)
-                    mse = np.sum(resid**2) / (resid.size - len(x))
-                    cov = cov * mse
-                    ci = np.sqrt(np.maximum(np.diagonal(cov), 0))
-                else:
-                    ci = np.zeros_like(x)
-            except Exception as e:
-                print(f"Covariance Error: {e}")
-                ci = np.zeros_like(x)
+                # Lógica para Chirp/Independent t0 si fuera necesario
+                pass
+        except Exception as e:
+            print(f"Error extrayendo amplitudes: {e}")
     
-            self.ci = ci 
+        # --- 5. Lógica de Guardado ---
+        base_dir = self.base_dir
+        outdir = os.path.join(base_dir, "fit")
+        os.makedirs(outdir, exist_ok=True)
+    
+        try:
+            # A) Guardar binario para recarga
+            np.save(os.path.join(outdir, "GFitResults.npy"), {
+                "taus": self.extracted_taus,
+                "err_taus": self.extracted_errtaus,
+                "As": self.As,
+                "errAs": self.errAs,
+                "WL": WL,
+                "TD": TD,
+                "fitres": fitres,
+                "resid": resid
+            })
+    
+            # B) Guardar archivos de texto planos
+            np.savetxt(os.path.join(outdir, "WL.txt"), WL, fmt='%.6f', header="Wavelength (nm)")
+            np.savetxt(os.path.join(outdir, "TD.txt"), TD, fmt='%.6f', header="Time Delay (ps)")
             
-            # 3. Extraer Taus
-            idx_tau = 1 if self.t0_choice == 'Yes' else 2
-            self.extracted_taus = x[idx_tau : idx_tau + self.numExp]
-            self.extracted_errtaus = ci[idx_tau : idx_tau + self.numExp]
-            
-            # 4. Extraer Amplitudes Y SUS ERRORES (errAs)
-            self.As = np.zeros((self.numExp, numWL))
-            self.errAs = np.zeros((self.numExp, numWL)) # <--- Inicializamos matriz errores
-            
-            try:
-                if self.t0_choice == 'No':
-                    base_A = 2 + self.numExp
-                    
-                    # Extraer valores (As)
-                    self.As = x[base_A:].reshape(numWL, self.numExp).T
-                    
-                    # Extraer errores (errAs) usando la misma lógica de reshape
-                    self.errAs = ci[base_A:].reshape(numWL, self.numExp).T
-                    
-                    self.t0s = np.full(numWL, x[1])
-                else:
-                    # Lógica placeholder para chirp (complejo de vectorizar simple)
-                    self.t0s = np.zeros(numWL)
-            except Exception as e:
-                print(f"Error extracting amplitudes: {e}")
-            
-            # 5. Actualizar UI
-            self._wl_proc = WL
-            self._td_proc = TD
-            self._update_fit_canvas()
-            self._update_resid_canvas()
-            self.btn_show_das.setEnabled(True)
-            
-            QMessageBox.information(self, "Fit Finished", f"Optimization complete.\nRMSD: {np.sqrt(np.mean(resid**2)):.2e}")
+            # C) Amplitudes con formato de tabla
+            with open(os.path.join(outdir, "Amplitudes.txt"), 'w') as f:
+                header_list = [f"A{i+1}\tErrA{i+1}" for i in range(numExp)]
+                f.write("WL(nm)\t" + "\t".join(header_list) + "\n")
+                for i in range(numWL):
+                    line_data = [f"{WL[i]:.2f}"]
+                    for j in range(numExp):
+                        line_data.append(f"{self.As[j, i]:.6e}")
+                        line_data.append(f"{self.errAs[j, i]:.6e}")
+                    f.write("\t".join(line_data) + "\n")
+     
+            print(f"Resultados exportados exitosamente a: {outdir}")
+    
+        except Exception as e:
+            print(f"Error crítico guardando archivos: {e}")
+    
+        # Actualizar Interfaz
+        self._update_fit_canvas()
+        self._update_resid_canvas()
+        self.btn_show_das.setEnabled(True)
+    
+        rmsd = np.sqrt(np.mean(resid**2))
+        QMessageBox.information(self, "Ajuste Finalizado", 
+                                f"Optimización completada.\nRMSD: {rmsd:.2e}\nDatos guardados en /fit/")
     def plot_das_and_more(self):
-         """Abre ventana externa SOLO con DAS/SAS y luego permite chequear trazas."""
-         if self.As is None: return
-         
-         # --- PARTE 1: Gráfico Global DAS/SAS (Una sola figura) ---
-         plt.figure(figsize=(8, 5))
-         ax = plt.gca()
-         
-         wl = getattr(self, '_wl_proc', self.WL)
-         colors = ['b', 'r', 'g', 'orange', 'm', 'c']
-         
-         for n in range(self.numExp):
-             tau_val = self.extracted_taus[n]
-             err_tau = self.extracted_errtaus[n] if not np.isnan(self.extracted_errtaus[n]) else 0.0
-             lbl = f"τ{n+1} = {tau_val:.2f} ± {err_tau:.2f} ps"
-             color = colors[n % len(colors)]
-             
-             # Línea principal
-             ax.plot(wl, self.As[n], label=lbl, color=color, linewidth=2)
-             
-             # Sombra de error
-             if self.errAs is not None:
-                 lower = np.nan_to_num(self.As[n] - self.errAs[n])
-                 upper = np.nan_to_num(self.As[n] + self.errAs[n])
-                 ax.fill_between(wl, lower, upper, color=color, alpha=0.2)
-             
-         ax.set_xlabel("Wavelength (nm)")
-         if self.model_type == "Sequential":
-             ax.set_ylabel("SAS (Concentration)")
-             ax.set_title("Species Associated Spectra (SAS)")
-         else:
-             ax.set_ylabel("DAS (Amplitude)")
-             ax.set_title("Decay Associated Spectra (DAS)")
-         ax.legend()
-         ax.axhline(0, color='k', linestyle='--', alpha=0.5)
-         ax.grid(True, linestyle=':', alpha=0.4)
-         
-         plt.tight_layout()
-         plt.show(block=False)
+            """
+            Abre ventana externa con DAS/SAS (guarda exactamente lo que muestra)
+            y permite chequear trazas individuales guardándolas en el formato solicitado.
+            """
+            if self.As is None: return
     
-         # --- PARTE 2: Chequeo Interactivo de Trazas ---
-         td = getattr(self, '_td_proc', self.TD)
-         cont = True
-         while cont:
-             text_default = str(wl[len(wl)//2])
-             wl_str, ok = QInputDialog.getText(self, "Check Trace", f"Enter wavelength ({wl.min():.1f}-{wl.max():.1f}):", text=text_default)
-             if not ok: break
-             try:
-                 idx = np.argmin(np.abs(wl - float(wl_str)))
-                 real_wl = wl[idx]
-                 plt.figure(figsize=(7, 4))
-                 plt.plot(td, self.data_c[idx, :], 'bo', markersize=3, alpha=0.5, label='Exp')
-                 plt.plot(td, self.fit_fitres[idx, :], 'r-', linewidth=2, label='Fit')
-                 plt.xscale('symlog', linthresh=0.1)
-                 plt.title(f"Trace at {real_wl:.1f} nm")
-                 plt.xlabel("Delay (ps)"); plt.ylabel("ΔA")
-                 plt.legend(); plt.grid(True, alpha=0.3)
-                 plt.tight_layout(); plt.show()
-             except: pass
-             if QMessageBox.question(self, "Next?", "Check another?", QMessageBox.Yes|QMessageBox.No) == QMessageBox.No: cont = False
-
+            # Definir directorio de salida para plots
+            outdir = os.path.join(self.base_dir, "Plots")
+            os.makedirs(outdir, exist_ok=True)
+    
+            wl = getattr(self, '_wl_proc', self.WL)
+            td = getattr(self, '_td_proc', self.TD)
+    
+            # =================================================================
+            # --- PARTE 1: Gráfico Global DAS/SAS (Mostrar y Guardar el MISMO) ---
+            # =================================================================
+            # Creamos LA figura y guardamos su referencia en 'fig_das'
+            fig_das = plt.figure(figsize=(8, 5))
+            ax = fig_das.gca()
+    
+            colors = ['b', 'r', 'g', 'orange', 'm', 'c']
+    
+            for n in range(self.numExp):
+                tau_val = self.extracted_taus[n]
+                # Verificar si existe error y no es NaN
+                if self.extracted_errtaus is not None and n < len(self.extracted_errtaus):
+                     err_tau = self.extracted_errtaus[n]
+                     if np.isnan(err_tau): err_tau = 0.0
+                else:
+                     err_tau = 0.0
+    
+                lbl = f"τ{n+1} = {tau_val:.2f} ± {err_tau:.2f} ps"
+                color = colors[n % len(colors)]
+    
+                # 1. Línea principal
+                ax.plot(wl, self.As[n], label=lbl, color=color, linewidth=2)
+    
+                # 2. Sombra de error (Si existe)
+                if self.errAs is not None:
+                    lower = np.nan_to_num(self.As[n] - self.errAs[n])
+                    upper = np.nan_to_num(self.As[n] + self.errAs[n])
+                    ax.fill_between(wl, lower, upper, color=color, alpha=0.2)
+    
+            ax.set_xlabel("Energy (eV)")
+            if self.model_type == "Sequential":
+                ax.set_ylabel("SAS (Concentration)")
+                ax.set_title("Species Associated Spectra (SAS)")
+                savename = "SAS.png"
+            else:
+                ax.set_ylabel("DAS (Amplitude)")
+                ax.set_title("Decay Associated Spectra (DAS)")
+                savename = "DAS.png"
+    
+            ax.legend()
+            ax.axhline(0, color='k', linestyle='--', alpha=0.5)
+            ax.grid(True, linestyle=':', alpha=0.4)
+            fig_das.tight_layout()
+    
+            # --- GUARDAR EXACTAMENTE LO QUE SE HA DIBUJADO ---
+            try:
+                fig_das.savefig(os.path.join(outdir, savename), dpi=300)
+                print(f"DAS/SAS plot saved to {outdir}")
+            except Exception as e:
+                print(f"Error saving DAS plot: {e}")
+    
+            # MOSTRAR la figura (no bloqueante para que el código siga)
+            fig_das.show()
+    
+    
+            # --- Guardar Mapa de Residuos (Esto ya lo hacías bien) ---
+            fig_res, ax_res = plt.subplots()
+            # Nota: Usamos fit_resid.T para que coincida con dimensiones (WL, TD) del pcolormesh
+            pcm = ax_res.pcolormesh(wl, td, self.fit_resid.T, cmap='jet', shading='auto')
+            fig_res.colorbar(pcm, ax=ax_res, label='Residuals')
+            ax_res.set_title("Residuals Map")
+            ax_res.set_xlabel("Energy (eV)")
+            ax_res.set_ylabel("Delay (ps)")
+            # Aplicar escala log si estaba seleccionada en la GUI
+            if hasattr(self, 'yscale') and self.yscale == 'symlog':
+                 ax_res.set_yscale('symlog', linthresh=1.0)
+            fig_res.tight_layout()
+            fig_res.savefig(os.path.join(outdir, "Residuals_Map.png"), dpi=300)
+            plt.close(fig_res)
+    
+    
+            # =================================================================
+            # --- PARTE 2: Chequeo Interactivo de Trazas (CORREGIDO) ---
+            # =================================================================
+            cont = True
+            while cont:
+                text_default = f"{wl[len(wl)//2]:.1f}"
+                wl_str, ok = QInputDialog.getText(self, "Check Trace", 
+                                                  f"Enter wavelength nm ({wl.min():.1f}-{wl.max():.1f}):", 
+                                                  text=text_default)
+                if not ok: break
+    
+                try:
+                    target_wl = float(wl_str)
+                    idx = np.argmin(np.abs(wl - target_wl))
+                    real_wl = wl[idx]
+    
+                    y_exp = self.data_c[idx, :]
+                    y_fit = self.fit_fitres[idx, :]
+    
+                    # Crear la figura con los dos paneles (Lineal y Log)
+                    fig_trace, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5), sharey=True)
+                    fig_trace.suptitle(f"Fit at {real_wl:.1f} nm", fontsize=14)
+    
+                    # Panel Izquierdo: Lineal
+                    ax1.plot(td, y_exp, 'bo', markersize=4, alpha=0.6, label='Data')
+                    ax1.plot(td, y_fit, 'r-', linewidth=2, label='Fit')
+                    ax1.set_xlabel("Time / ps")
+                    ax1.set_ylabel("ΔA")
+                    ax1.legend()
+                    ax1.grid(True, alpha=0.3)
+    
+                    # Panel Derecho: Logarítmico
+                    mask_pos = td > 0
+                    if np.any(mask_pos):
+                        ax2.plot(td[mask_pos], y_exp[mask_pos], 'bo', markersize=4, alpha=0.6)
+                        ax2.plot(td[mask_pos], y_fit[mask_pos], 'r-', linewidth=2)
+                        ax2.set_xscale('log')
+                        ax2.set_xlabel("Time / ps (log scale)")
+                        ax2.grid(True, which="both", ls="-", alpha=0.3)
+    
+                    plt.tight_layout()
+    
+                    # --- CAMBIO CLAVE: Forzamos que la ventana se quede abierta ---
+                    # block=True detiene la ejecución del código hasta que CIERRES la ventana del gráfico
+                    plt.show(block=True) 
+    
+                    # --- ESTO SE EJECUTA SOLO DESPUÉS DE CERRAR EL GRÁFICO ---
+                    resp = QMessageBox.question(self, "Save Trace?",
+                                                f"¿Deseas guardar los archivos de la traza a {real_wl:.1f} nm?",
+                                                QMessageBox.Yes | QMessageBox.No)
+    
+                    if resp == QMessageBox.Yes:
+                        # 1. Guardar Imagen
+                        img_name = f"Trace_{real_wl:.1f}nm.png"
+                        fig_trace.savefig(os.path.join(outdir, img_name), dpi=300)
+    
+                        # 2. Guardar TXT con el formato de tu imagen
+                        txt_name = f"Fit_{real_wl:.1f}nm.txt"
+                        txt_path = os.path.join(outdir, txt_name)
+                        
+                        data_stack = np.column_stack((td, y_exp, y_fit))
+                        
+                        # Definimos la cabecera con el # inicial como en tu Bloc de notas
+                        header_txt = "TD(ps)\tExp(A)\tFit(A)"
+                        
+                        np.savetxt(txt_path, data_stack, fmt='%1.6e', delimiter='\t',
+                                   header=header_txt, comments='# ') # Mantiene el estilo de la imagen
+    
+                    plt.close(fig_trace) # Limpiamos la memoria de la figura
+    
+                except Exception as e:
+                    QMessageBox.critical(self, "Error", f"Error al procesar la traza: {e}")
+    
+                # Preguntar si ver otra longitud de onda
+                if QMessageBox.question(self, "Continuar", "¿Ver otra traza?", 
+                                        QMessageBox.Yes|QMessageBox.No) == QMessageBox.No:
+                    cont = False
 if __name__ == "__main__":
     app = QApplication(sys.argv)
 
