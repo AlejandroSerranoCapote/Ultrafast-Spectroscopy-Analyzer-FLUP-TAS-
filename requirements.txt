@@ -4,8 +4,10 @@ pandas>=1.4
 matplotlib>=3.5
 scipy>=1.7
 PyQt5>=5.15
-
+pytest-qt
+pytest-xvfb
 
 # --- Herramientas opcionales de empaquetado ---
 pyinstaller>=6.0
+
 
