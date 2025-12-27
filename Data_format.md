@@ -1,12 +1,12 @@
-# 📁 Formatos de datos admitidos y archivos generados
+#  Formatos de datos admitidos y archivos generados
 
 Este documento describe los formatos de archivo que el **Ultrafast Spectroscopy Analyzer** puede importar y exportar.
 
 ---
 
-## 🧩 Datos de entrada
+##  Datos de entrada
 
-### 🔹 FLUPS (*Fluorescence Up-Conversion Spectroscopy*)
+###  FLUPS (*Fluorescence Up-Conversion Spectroscopy*)
 Se admite un único archivo `.csv` con el siguiente formato:
 
 | Fila / Columna | Contenido                |
@@ -46,7 +46,7 @@ También se admiten 3 archivos `.txt` de la siguiente forma:
 ```
 ---
 
-### 🔹 TAS (*Transient Absorption Spectroscopy*)
+###  TAS (*Transient Absorption Spectroscopy*)
 Se requieren **dos archivos**:
 
 1. **Medida experimental** (`sample.csv`)  
@@ -71,7 +71,7 @@ El programa combina ambas matrices, resta el solvente, y aplica las correcciones
 
 ---
 
-## 📦 Archivos generados automáticamente
+##  Archivos generados automáticamente
 
 Tras ejecutar un ajuste de *t₀* y un análisis global, se crea una carpeta:
 
@@ -101,7 +101,7 @@ Tras ejecutar un ajuste de *t₀* y un análisis global, se crea una carpeta:
     └── Residual.png       → Plot de los residuals del ajuste
 ```
 
-## 🧠 Notas adicionales
+##  Notas adicionales
 
 - Los archivos `.npy` pueden cargarse directamente en Python con `numpy.load()`.  
 - Los nombres de las carpetas se generan automáticamente según el archivo de entrada.
