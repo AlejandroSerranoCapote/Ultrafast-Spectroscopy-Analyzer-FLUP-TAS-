@@ -1897,6 +1897,7 @@ class GlobalFitPanel(QDialog):
         self.spin_t_max = QDoubleSpinBox(); self.spin_t_max.setRange(-100, 1e6); self.spin_t_max.setDecimals(3)
         form_prep.addRow("Min Time (ps):", self.spin_t_min)
         form_prep.addRow("Max Time (ps):", self.spin_t_max)
+        
 
         # Binning
         self.spin_bin = QSpinBox()
@@ -1915,6 +1916,11 @@ class GlobalFitPanel(QDialog):
         # --- Grupo 3: Modelo ---
         gb_model = QGroupBox("3. Model Settings")
         form_model = QFormLayout()
+        
+        self.btn_svd = QPushButton("Run SVD Analysis")
+        self.btn_svd.clicked.connect(self.run_svd)
+        form_model.addRow(self.btn_svd)
+        
         # --- D. Visualización (NUEVO) ---
         gb_vis = QGroupBox("4. Visualization")
         form_vis = QFormLayout()
@@ -1971,6 +1977,65 @@ class GlobalFitPanel(QDialog):
 
         l.addStretch() # Empujar todo arriba
         
+    def run_svd(self):
+        if self.data_c is None:
+            QMessageBox.warning(self, "Error", "Carga y procesa datos primero (Apply & Preview).")
+            return
+    
+        # 1. Ejecutar SVD matemático
+        # data_c suele ser [WL x TD]
+        try:
+            # Usamos economy SVD (compute_uv=True por defecto)
+            U, s, Vh = np.linalg.svd(self.data_c, full_matrices=False)
+            
+            self.svd_U = U    # Vectores espectrales (Especies)
+            self.svd_s = s    # Importancia de cada uno
+            self.svd_V = Vh.T # Vectores temporales (Cinéticas)
+    
+            self._plot_svd_results()
+            self.tabs.setCurrentWidget(self.tab_svd) # Cambiar a la pestaña SVD automáticamente
+            
+        except Exception as e:
+            print(f"SVD Error: {e}")
+    def _create_svd_canvas(self, tab_widget):
+        fig = plt.Figure(figsize=(5, 8))
+        # ax1: Scree Plot, ax2: Primeros Componentes Espectrales
+        ax1 = fig.add_subplot(211) 
+        ax2 = fig.add_subplot(212)
+        canvas = FigureCanvas(fig)
+        
+        layout = QVBoxLayout()
+        layout.addWidget(canvas)
+        tab_widget.setLayout(layout)
+        return canvas, (ax1, ax2)
+
+    def _plot_svd_results(self):
+        ax1, ax2 = self.ax_svd
+        ax1.clear()
+        ax2.clear()
+    
+        # --- Plot 1: Scree Plot (Log scale) ---
+        n_comp = min(len(self.svd_s), 10) # Ver top 10
+        ax1.semilogy(range(1, n_comp + 1), self.svd_s[:n_comp], 'o-', color='red')
+        ax1.set_title("Singular Values (Scree Plot)")
+        ax1.set_ylabel("Eigenvalue (log)")
+        ax1.set_xlabel("Component Number")
+        ax1.grid(True, which="both", ls="-", alpha=0.2)
+    
+        # 2. Componentes Espectrales 
+        wl = getattr(self, '_wl_proc', self.WL)
+        # Leemos el valor del SpinBox de la interfaz
+        n_mostrar = self.spin_numExp.value() 
+        
+        for i in range(min(n_mostrar, len(self.svd_s))):
+            ax2.plot(wl, self.svd_U[:, i], label=f"Comp {i+1}")
+        
+        ax2.set_title(f"First {n_mostrar} Spectral Components")
+        ax2.set_xlabel("Energy / Wavelength")
+        ax2.axhline(0, color='black', lw=1, alpha=0.5)
+        ax2.legend()
+        
+        self.canvas_svd.draw()        
         def _generate_defaults(self):
             """Genera los valores iniciales (Guesses) basados en la configuración actual."""
             # 1. Leer configuración actual
@@ -1978,8 +2043,6 @@ class GlobalFitPanel(QDialog):
             t0_choice = 'Yes' if self.chk_chirp.isChecked() else 'No'
             tech = self.combo_tech.currentText()
             
-            # Necesitamos saber numWL para calcular el tamaño
-            # Si data_c existe usamos su tamaño, si no, usamos WL raw, si no, error
             if self.data_c is not None:
                 numWL = self.data_c.shape[0]
             elif self.WL is not None:
@@ -2078,15 +2141,18 @@ class GlobalFitPanel(QDialog):
             self.tab_exp = QWidget()
             self.tab_fit = QWidget()
             self.tab_resid = QWidget()
+            self.tab_svd = QWidget() 
             
             self.tabs.addTab(self.tab_exp, "Experimental")
             self.tabs.addTab(self.tab_fit, "Fit Reconstructed")
             self.tabs.addTab(self.tab_resid, "Residuals")
+            self.tabs.addTab(self.tab_svd, "SVD Diagnosis")
             
             # Crear Canvas (usando helper)
             self.canvas_exp, self.ax_exp = self._create_canvas_for_tab(self.tab_exp)
             self.canvas_fit, self.ax_fit = self._create_canvas_for_tab(self.tab_fit)
             self.canvas_resid, self.ax_resid = self._create_canvas_for_tab(self.tab_resid)
+            self.canvas_svd, self.ax_svd = self._create_svd_canvas(self.tab_svd)
             
             l.addWidget(self.tabs)
             
@@ -2864,10 +2930,7 @@ class GlobalFitPanel(QDialog):
             wl = getattr(self, '_wl_proc', self.WL)
             td = getattr(self, '_td_proc', self.TD)
     
-            # =================================================================
-            # --- PARTE 1: Gráfico Global DAS/SAS (Mostrar y Guardar el MISMO) ---
-            # =================================================================
-            # Creamos LA figura y guardamos su referencia en 'fig_das'
+
             fig_das = plt.figure(figsize=(8, 5))
             ax = fig_das.gca()
     
@@ -2909,18 +2972,14 @@ class GlobalFitPanel(QDialog):
             ax.grid(True, linestyle=':', alpha=0.4)
             fig_das.tight_layout()
     
-            # --- GUARDAR EXACTAMENTE LO QUE SE HA DIBUJADO ---
             try:
                 fig_das.savefig(os.path.join(outdir, savename), dpi=300)
                 print(f"DAS/SAS plot saved to {outdir}")
             except Exception as e:
                 print(f"Error saving DAS plot: {e}")
     
-            # MOSTRAR la figura (no bloqueante para que el código siga)
             fig_das.show()
     
-    
-            # --- Guardar Mapa de Residuos (Esto ya lo hacías bien) ---
             fig_res, ax_res = plt.subplots()
             # Nota: Usamos fit_resid.T para que coincida con dimensiones (WL, TD) del pcolormesh
             pcm = ax_res.pcolormesh(wl, td, self.fit_resid.T, cmap='jet', shading='auto')
@@ -2935,10 +2994,6 @@ class GlobalFitPanel(QDialog):
             fig_res.savefig(os.path.join(outdir, "Residuals_Map.png"), dpi=300)
             plt.close(fig_res)
     
-    
-            # =================================================================
-            # --- PARTE 2: Chequeo Interactivo de Trazas (CORREGIDO) ---
-            # =================================================================
             cont = True
             while cont:
                 text_default = f"{wl[len(wl)//2]:.1f}"
@@ -2978,8 +3033,6 @@ class GlobalFitPanel(QDialog):
     
                     plt.tight_layout()
     
-                    # --- CAMBIO CLAVE: Forzamos que la ventana se quede abierta ---
-                    # block=True detiene la ejecución del código hasta que CIERRES la ventana del gráfico
                     plt.show(block=True) 
     
                     # --- ESTO SE EJECUTA SOLO DESPUÉS DE CERRAR EL GRÁFICO ---
