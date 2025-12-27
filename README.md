@@ -1,5 +1,5 @@
 # Ultrafast Spectroscopy Analyzer 
-![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 
 **Ultrafast Spectroscopy Analyzer** is a comprehensive, open-source software suite designed for the advanced processing and analysis of ultrafast spectroscopy data. It provides an intuitive graphical environment to transform raw experimental data into publication-quality results.
 
